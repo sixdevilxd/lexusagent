@@ -24,6 +24,18 @@ export const publicClient = createPublicClient({
 export async function getKernelClient(userId: number) {
   const signer = privateKeyToAccount(getPrivateKey(userId));
 
+  // ZeroDev API v3 exposes ONE RPC URL that serves both bundler and paymaster:
+  //   https://rpc.zerodev.app/api/v3/<PROJECT_ID>/chain/<CHAIN_ID>
+  // The separate *_BUNDLER_RPC / *_PAYMASTER_RPC vars remain as optional overrides.
+  const bundlerRpc = config.zerodev.bundlerRpc || config.zerodev.rpc;
+  const paymasterRpc = config.zerodev.paymasterRpc || config.zerodev.rpc;
+
+  if (!bundlerRpc) {
+    throw new Error(
+      "ZERODEV_RPC not set in .env — get it from https://dashboard.zerodev.app",
+    );
+  }
+
   const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
     signer,
     entryPoint,
@@ -36,22 +48,24 @@ export async function getKernelClient(userId: number) {
     kernelVersion,
   });
 
-  const paymasterClient = config.zerodev.paymasterRpc
+  const paymasterClient = paymasterRpc
     ? createZeroDevPaymasterClient({
         chain: config.chain,
-        transport: http(config.zerodev.paymasterRpc),
+        transport: http(paymasterRpc),
       })
     : undefined;
 
   const kernelClient = createKernelAccountClient({
     account,
     chain: config.chain,
-    bundlerTransport: http(config.zerodev.bundlerRpc || config.rpcUrl),
+    // Required by the current SDK — the public client.
+    client: publicClient,
+    bundlerTransport: http(bundlerRpc),
     ...(paymasterClient
       ? {
           paymaster: {
-            getPaymasterData: (userOp: any) =>
-              paymasterClient.sponsorUserOperation({ userOperation: userOp }),
+            getPaymasterData: (userOperation: any) =>
+              paymasterClient.sponsorUserOperation({ userOperation }),
           },
         }
       : {}),

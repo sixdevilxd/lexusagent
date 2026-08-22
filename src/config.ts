@@ -80,9 +80,11 @@ export const config = {
   explorerTx: EXPLORERS[chainKey] ?? "",
   rpcUrl: req("RPC_URL"),
 
-  // ---- ZeroDev ----
+  // ---- ZeroDev (API v3: one RPC serves bundler + paymaster) ----
   zerodev: {
     projectId: process.env.ZERODEV_PROJECT_ID ?? "",
+    rpc: process.env.ZERODEV_RPC ?? "",
+    // Optional overrides; fall back to `rpc` when empty.
     bundlerRpc: process.env.ZERODEV_BUNDLER_RPC ?? "",
     paymasterRpc: process.env.ZERODEV_PAYMASTER_RPC ?? "",
   },
