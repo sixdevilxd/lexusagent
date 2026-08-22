@@ -40,9 +40,10 @@ const chainKey = process.env.CHAIN ?? "base-sepolia";
 const chain = CHAINS[chainKey];
 if (!chain) throw new Error(`Unsupported CHAIN: ${chainKey}`);
 
-// AgentRouter base URL is FIXED to agentrouter.org by project requirement.
-// Do not point this at any other host.
-const AGENTROUTER_BASE_URL = "https://agentrouter.org/v1";
+// AgentRouter base URLs are FIXED to agentrouter.org by project requirement.
+// OpenAI-compatible uses /v1; Anthropic-compatible does NOT. Never mix them.
+const AGENTROUTER_OPENAI_BASE_URL = "https://agentrouter.org/v1";
+const AGENTROUTER_ANTHROPIC_BASE_URL = "https://agentrouter.org";
 
 export const config = {
   telegramToken: req("TELEGRAM_BOT_TOKEN"),
@@ -53,17 +54,24 @@ export const config = {
     .map(Number),
 
   // ---- AI provider selection ----
-  aiProvider: (process.env.AI_PROVIDER ?? "claude") as "claude" | "agentrouter",
+  // claude | agentrouter | agentrouter-claude
+  aiProvider: (process.env.AI_PROVIDER ?? "claude") as
+    | "claude"
+    | "agentrouter"
+    | "agentrouter-claude",
 
   // Claude Code CLI
   claudeCmd: process.env.CLAUDE_CMD ?? "claude",
   claudeArgs: (process.env.CLAUDE_ARGS ?? "-p").split(" ").filter(Boolean),
 
-  // AgentRouter (OpenAI-compatible). baseUrl is intentionally hardcoded.
+  // AgentRouter. Base URLs are intentionally hardcoded.
   agentRouter: {
     apiKey: process.env.AGENTROUTER_API_KEY ?? "",
-    baseUrl: AGENTROUTER_BASE_URL,
-    model: process.env.AGENTROUTER_MODEL ?? "gpt-5",
+    baseUrl: AGENTROUTER_OPENAI_BASE_URL,
+    anthropicBaseUrl: AGENTROUTER_ANTHROPIC_BASE_URL,
+    model: process.env.AGENTROUTER_MODEL ?? "gpt-5.5",
+    anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-4-6",
+    maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "4096"),
   },
 
   // ---- Chain / RPC ----
