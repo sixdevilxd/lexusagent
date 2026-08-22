@@ -51,9 +51,43 @@ async function showTxs(ctx: Context): Promise<void> {
 }
 
 export function registerHandlers(bot: Bot): void {
+  // ---- diagnostics ----
+  bot.command("ping", async (ctx) => {
+    await ctx.reply("🏓 pong — bot is alive");
+  });
+
+  bot.command("status", async (ctx) => {
+    const model =
+      config.aiProvider === "agentrouter"
+        ? config.agentRouter.model
+        : config.aiProvider === "agentrouter-claude"
+          ? config.agentRouter.anthropicModel
+          : `${config.claudeCmd} ${config.claudeArgs.join(" ")}`;
+    await ctx.reply(
+      "🩺 *Status*\n\n" +
+        `AI provider: *${config.aiProvider}*\n` +
+        `Model: *${model}*\n` +
+        `AgentRouter key: ${config.agentRouter.apiKey ? "✅ set" : "❌ not set"}\n` +
+        `Chain: *${config.chainKey}*\n` +
+        `ZeroDev RPC: ${config.zerodev.rpc ? "✅ set" : "❌ not set"}\n` +
+        `Allowlist: ${config.allowedUserIds.length ? `${config.allowedUserIds.length} user(s)` : "open to everyone"}\n` +
+        `Your Telegram ID: \`${ctx.from?.id}\``,
+      { parse_mode: "Markdown" },
+    );
+  });
+
+  bot.command("ai", async (ctx) => {
+    const q = (ctx.match || "").trim();
+    if (!q) {
+      await ctx.reply("Usage: /ai <your question>");
+      return;
+    }
+    await askAndReply(ctx, q);
+  });
+
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "🚗 *lexusagent*\nAI trading agent powered by Claude Code / AgentRouter + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/mint [url] — create a token (AI reads target + confirm to sign)\n/tx — recent transactions",
+      "🚗 *lexusagent*\nAI trading agent powered by Claude Opus 5 + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/ping — check the bot is alive\n/status — show configuration\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/mint [url] — create a token (confirm before signing)\n/tx — recent transactions",
       { parse_mode: "Markdown", reply_markup: mainMenu },
     );
   });
@@ -141,12 +175,19 @@ export function registerHandlers(bot: Bot): void {
   bot.on("message:text", async (ctx) => {
     if (ctx.message.text.startsWith("/")) return;
     if (await handleMintInput(ctx, ctx.message.text)) return;
-    await ctx.replyWithChatAction("typing");
-    try {
-      const answer = await ask(ctx.message.text);
-      await ctx.reply(answer || "(no output)");
-    } catch (e: any) {
-      await ctx.reply(`❌ AI error: ${e.message}`);
-    }
+    await askAndReply(ctx, ctx.message.text);
   });
+}
+
+async function askAndReply(ctx: Context, prompt: string): Promise<void> {
+  await ctx.replyWithChatAction("typing");
+  const t0 = Date.now();
+  try {
+    const answer = await ask(prompt);
+    console.log(`[ai] ${config.aiProvider} replied in ${Date.now() - t0}ms`);
+    await ctx.reply(answer || "(no output)");
+  } catch (e: any) {
+    console.error(`[ai error] provider=${config.aiProvider}`, e);
+    await ctx.reply(`❌ AI error (${config.aiProvider}): ${e.message}`);
+  }
 }
