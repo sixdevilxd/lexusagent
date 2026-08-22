@@ -1,16 +1,25 @@
 import { config } from "../config";
-import { askAgentRouter, askAgentRouterAnthropic } from "./agentrouter";
+import { streamAgentRouter, streamAgentRouterAnthropic } from "./agentrouter";
 
 /**
- * Unified AI entry point. The brain always runs on the AgentRouter API key.
- *   agentrouter-claude -> Anthropic protocol  (claude-opus-5)   [default]
- *   agentrouter        -> OpenAI-compatible   (gpt-5.5 / glm-5.2)
+ * Streaming AI entry point. Always runs on the AgentRouter API key.
+ * `onDelta` is called with each text fragment as it arrives.
+ * Returns the complete answer.
  */
-export async function ask(
+export async function askStream(
   prompt: string,
-  opts?: { timeoutMs?: number },
+  onDelta: (text: string) => void,
+  opts?: { idleMs?: number },
 ): Promise<string> {
   return config.aiProvider === "agentrouter"
-    ? askAgentRouter(prompt, opts)
-    : askAgentRouterAnthropic(prompt, opts);
+    ? streamAgentRouter(prompt, onDelta, opts)
+    : streamAgentRouterAnthropic(prompt, onDelta, opts);
+}
+
+/** Non-streaming convenience wrapper (used by the mint page reader). */
+export async function ask(
+  prompt: string,
+  opts?: { idleMs?: number },
+): Promise<string> {
+  return askStream(prompt, () => {}, opts);
 }
