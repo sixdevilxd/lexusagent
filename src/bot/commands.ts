@@ -2,8 +2,8 @@ import type { Bot, Context } from "grammy";
 import type { Address } from "viem";
 import { config } from "../config";
 import { mainMenu } from "./keyboards";
-import { replyLong } from "./reply";
-import { ask } from "../ai";
+import { StreamingMessage, keepTyping } from "./stream";
+import { askStream } from "../ai";
 import { createWallet, getEoaAddress, hasWallet } from "../wallet/store";
 import { getKernelClient } from "../wallet/zerodev";
 import { getBalances, buyToken, sellToken } from "../wallet/trade";
@@ -109,7 +109,6 @@ async function githubConnect(ctx: Context): Promise<void> {
 }
 
 export function registerHandlers(bot: Bot): void {
-  // ---- diagnostics ----
   bot.command("ping", async (ctx) => {
     await ctx.reply("🏓 pong — bot is alive");
   });
@@ -124,11 +123,12 @@ export function registerHandlers(bot: Bot): void {
       "🩺 *Status*\n\n" +
         `AI: *${model}* via AgentRouter\n` +
         `Protocol: ${config.aiProvider === "agentrouter" ? "OpenAI-compatible" : "Anthropic"}\n` +
+        `Streaming: ✅ on\n` +
+        `Max tokens: ${config.agentRouter.maxTokens}\n` +
         `AgentRouter key: ${config.agentRouter.apiKey ? "✅ set" : "❌ not set"}\n` +
         `GitHub: ${gh ? `✅ ${gh}` : "❌ not connected"}\n` +
-        `Chain: *${config.chainKey}*\n` +
-        `ZeroDev RPC: ${config.zerodev.rpc ? "✅ set" : "❌ not set"}\n` +
-        `Allowlist: ${config.allowedUserIds.length ? `${config.allowedUserIds.length} user(s)` : "open to everyone"}\n` +
+        `Chain: *${config.chainName}* (${config.chainId})${config.isTestnet ? " testnet" : " MAINNET"}\n` +
+        `ZeroDev: ${config.zerodev.rpc ? "✅ set" : "❌ not set"}\n` +
         `Your Telegram ID: \`${ctx.from?.id}\``,
       { parse_mode: "Markdown" },
     );
@@ -152,7 +152,7 @@ export function registerHandlers(bot: Bot): void {
   bot.command("start", async (ctx) => {
     await ctx.reply(
       "🚗 *lexusagent*\nAI coding + trading agent powered by Claude Opus 5.\n\n" +
-        "💬 *Just type anything* — I can write, debug and explain code in any language. No command needed.\n\n" +
+        "💬 *Just type anything* — I write, debug and explain code in any language. No command needed.\n\n" +
         "Commands:\n" +
         "/github — connect your GitHub account\n" +
         "/ping — check the bot is alive\n" +
@@ -254,15 +254,42 @@ export function registerHandlers(bot: Bot): void {
   });
 }
 
+/** Stream the AI answer into a single Telegram message, edited as it arrives. */
 async function askAndReply(ctx: Context, prompt: string): Promise<void> {
-  await ctx.replyWithChatAction("typing");
+  const stopTyping = keepTyping(ctx);
+  const stream = new StreamingMessage(ctx);
   const t0 = Date.now();
+  let firstMs = 0;
+  let ticker: NodeJS.Timeout | undefined;
+
   try {
-    const answer = await ask(prompt);
-    console.log(`[ai] replied in ${Date.now() - t0}ms`);
-    await replyLong(ctx, answer || "(no output)");
+    await stream.init();
+    ticker = setInterval(() => void stream.flush(), 1400);
+
+    const full = await askStream(prompt, (delta) => {
+      if (!firstMs) firstMs = Date.now() - t0;
+      stream.append(delta);
+    });
+
+    clearInterval(ticker);
+    await stream.finish();
+    console.log(
+      `[ai] first=${firstMs}ms total=${Date.now() - t0}ms chars=${full.length}`,
+    );
   } catch (e: any) {
+    if (ticker) clearInterval(ticker);
     console.error("[ai error]", e);
-    await ctx.reply(`❌ AI error: ${e.message}`);
+    const msg =
+      e?.name === "AbortError"
+        ? "AI berhenti merespons (stall). Coba kirim ulang."
+        : e.message;
+    try {
+      await stream.fail(msg);
+    } catch {
+      await ctx.reply(`❌ AI error: ${msg}`);
+    }
+  } finally {
+    if (ticker) clearInterval(ticker);
+    stopTyping();
   }
 }
