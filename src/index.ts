@@ -1,8 +1,53 @@
-import { Bot } from "grammy";
+import { setDefaultResultOrder } from "node:dns";
+
+// Mobile / Termux networks frequently blackhole IPv6 routes to api.telegram.org,
+// which surfaces as ETIMEDOUT. Node 20 defaults to "verbatim" (IPv6 first),
+// so force IPv4 before anything opens a socket.
+try {
+  setDefaultResultOrder("ipv4first");
+} catch {
+  /* older node */
+}
+
+import { Bot, GrammyError, HttpError } from "grammy";
 import { config } from "./config";
 import { registerHandlers } from "./bot/commands";
 
-const bot = new Bot(config.telegramToken);
+const bot = new Bot(config.telegramToken, {
+  client: {
+    // Long-poll friendly; default is 500s for getUpdates but short for others.
+    timeoutSeconds: 60,
+  },
+});
+
+// ---- retry transient network failures against the Telegram API ----
+const RETRIABLE = new Set([
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+]);
+
+bot.api.config.use(async (prev, method, payload, signal) => {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await prev(method, payload, signal);
+    } catch (e: any) {
+      lastErr = e;
+      const code = e?.code ?? e?.errno ?? e?.cause?.code;
+      if (!RETRIABLE.has(String(code))) throw e;
+      const wait = 800 * 2 ** attempt;
+      console.warn(`[net] ${method} ${code} - retry ${attempt + 1}/3 in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+});
 
 // ---- incoming update logging ----
 bot.use(async (ctx, next) => {
@@ -19,9 +64,9 @@ bot.use(async (ctx, next) => {
 bot.use(async (ctx, next) => {
   const uid = ctx.from?.id;
   if (config.allowedUserIds.length && (!uid || !config.allowedUserIds.includes(uid))) {
-    console.warn(`[auth] blocked ${uid} — not in ALLOWED_USER_IDS`);
+    console.warn(`[auth] blocked ${uid}`);
     await ctx.reply(
-      `⛔ Not authorized.\n\nYour Telegram ID: ${uid}\nAdd it to ALLOWED_USER_IDS in .env, then restart the bot.`,
+      `⛔ Not authorized.\n\nYour Telegram ID: ${uid}\nAdd it to ALLOWED_USER_IDS in .env, then restart.`,
     );
     return;
   }
@@ -31,68 +76,54 @@ bot.use(async (ctx, next) => {
 registerHandlers(bot);
 
 bot.catch((err) => {
-  console.error("[bot error]", (err as any).error ?? err);
+  const e = err.error;
+  if (e instanceof GrammyError) {
+    console.error(`[telegram] ${e.description}`);
+  } else if (e instanceof HttpError) {
+    console.error(`[network] cannot reach Telegram: ${(e as any)?.error?.code ?? e.message}`);
+  } else {
+    console.error("[bot error]", e);
+  }
 });
 
-// ---- startup sanity checks ----
+// ---- startup checks ----
 const isClaudeModel = (m: string) => /claude/i.test(m);
 const mask = (u: string) => u.replace(/\/api\/v3\/[^/]+/, "/api/v3/***");
 
 if (!config.agentRouter.apiKey) {
-  console.error(
-    "❌ AGENTROUTER_API_KEY is empty — the AI cannot reply.\n" +
-      "   Get a key at https://agentrouter.org/console/token",
+  console.error("❌ AGENTROUTER_API_KEY is empty - the AI cannot reply.");
+}
+if (config.aiProvider === "agentrouter") {
+  console.warn(
+    "⚠️  AI_PROVIDER=agentrouter - realtime tools (search, prices, token scan) are DISABLED.\n" +
+      "   Set AI_PROVIDER=agentrouter-claude to enable them.",
   );
 }
-
 if (config.aiProvider === "agentrouter" && isClaudeModel(config.agentRouter.model)) {
   console.error(
-    `❌ MISMATCH: AGENTROUTER_MODEL="${config.agentRouter.model}" is a Claude model,\n` +
-      "   but AI_PROVIDER=agentrouter uses the OpenAI-compatible endpoint.\n" +
-      "   Fix: AI_PROVIDER=agentrouter-claude   (or AGENTROUTER_MODEL=gpt-5.5)",
+    `❌ MISMATCH: AGENTROUTER_MODEL="${config.agentRouter.model}" is a Claude model on the OpenAI endpoint.\n` +
+      "   Fix: AI_PROVIDER=agentrouter-claude",
   );
 }
-if (
-  config.aiProvider === "agentrouter-claude" &&
-  !isClaudeModel(config.agentRouter.anthropicModel)
-) {
-  console.error(
-    `❌ MISMATCH: AGENTROUTER_CLAUDE_MODEL="${config.agentRouter.anthropicModel}" is not a Claude model,\n` +
-      "   but AI_PROVIDER=agentrouter-claude uses the Anthropic endpoint.",
-  );
-}
-
 if (!config.allowedUserIds.length) {
-  console.warn("⚠️  ALLOWED_USER_IDS is empty — anyone who finds the bot can use it.");
+  console.warn("⚠️  ALLOWED_USER_IDS is empty.");
 }
 if (!config.zerodev.rpc) {
-  console.error(
-    "❌ ZERODEV_PROJECT_ID is empty — wallet & trading commands WILL FAIL.\n" +
-      "   Public RPCs strip revert data, which breaks smart-account derivation.",
-  );
+  console.error("❌ ZERODEV_PROJECT_ID is empty - wallet & trading commands will fail.");
 }
-if (!config.dexRouter || !config.quoter) {
-  console.warn(
-    `⚠️  No Uniswap V3 preset for chain ${config.chainId} — set DEX_ROUTER, QUOTER_ADDRESS and WETH_ADDRESS to trade.`,
-  );
+if (!config.dexRouter || !config.positionManager) {
+  console.warn(`⚠️  No Uniswap V3 preset for chain ${config.chainId} - /buy /sell /lp disabled.`);
 }
-if (!config.github.clientId) {
-  console.warn("⚠️  GITHUB_CLIENT_ID is empty — /github will not work (see GITHUB.md).");
+if (
+  process.env.RPC_URL &&
+  /sepolia|testnet|goerli|amoy|fuji/i.test(process.env.RPC_URL) &&
+  !config.isTestnet
+) {
+  console.error(`❌ RPC_URL is a testnet endpoint but CHAIN=${config.chainKey} is mainnet.`);
 }
-
-// Chain sanity: an explicit RPC_URL that points at a different network is a
-// common copy-paste mistake after switching CHAIN.
-if (process.env.RPC_URL && /sepolia|testnet|goerli|amoy|fuji/i.test(process.env.RPC_URL) && !config.isTestnet) {
-  console.error(
-    `❌ RPC_URL looks like a testnet endpoint (${config.rpcUrl}) but CHAIN=${config.chainKey} is mainnet.\n` +
-      "   Clear RPC_URL in .env to use the chain default.",
-  );
-}
-
 if (!config.isTestnet) {
   console.warn(
-    `❗ MAINNET: ${config.chainName} (id ${config.chainId}) — real funds.\n` +
-      `   Slippage cap: ${config.slippageBps / 100}% (QuoterV2 enforced).`,
+    `❗ MAINNET: ${config.chainName} (${config.chainId}) - slippage cap ${config.slippageBps / 100}%`,
   );
 }
 
@@ -102,15 +133,12 @@ const activeModel =
     : config.agentRouter.anthropicModel;
 
 console.log("🚗 lexusagent starting...");
-console.log(`   AI    : ${activeModel} via AgentRouter (${config.aiProvider})`);
-console.log(
-  `   Chain : ${config.chainName} (id ${config.chainId})${config.isTestnet ? " [testnet]" : " [MAINNET]"}`,
-);
+console.log(`   AI    : ${activeModel} (${config.aiProvider})`);
+console.log(`   Chain : ${config.chainName} (${config.chainId})${config.isTestnet ? " [testnet]" : " [MAINNET]"}`);
 console.log(`   RPC   : ${mask(config.rpcUrl)}`);
-console.log(`   AA RPC: ${config.zerodev.rpc ? mask(config.zerodev.rpc) : "— not set"}`);
+console.log(`   AA RPC: ${config.zerodev.rpc ? mask(config.zerodev.rpc) : "- not set"}`);
 
 void bot.start({
   drop_pending_updates: true,
-  onStart: (info) =>
-    console.log(`✅ Connected to Telegram as @${info.username} — send /ping to test.`),
+  onStart: (info) => console.log(`✅ Connected as @${info.username}`),
 });
