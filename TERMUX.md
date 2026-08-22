@@ -53,7 +53,8 @@ Minimal yang wajib diisi:
 - `TELEGRAM_BOT_TOKEN` — dari [@BotFather](https://t.me/BotFather)
 - `ALLOWED_USER_IDS` — ID Telegram kamu (dari [@userinfobot](https://t.me/userinfobot))
 - `WALLET_ENCRYPTION_KEY` — hasil langkah 5
-- `AI_PROVIDER` — `claude`, `agentrouter`, atau `agentrouter-claude`
+- `AI_PROVIDER` — `agentrouter-claude` (default), `agentrouter`, atau `claude`
+- `AGENTROUTER_API_KEY` — dari [agentrouter.org/console/token](https://agentrouter.org/console/token)
 - `ZERODEV_PROJECT_ID`, `ZERODEV_BUNDLER_RPC`, `ZERODEV_PAYMASTER_RPC` — dari [dashboard.zerodev.app](https://dashboard.zerodev.app)
 
 ### 7. Pastikan otak AI jalan
@@ -64,52 +65,57 @@ Pilih salah satu dari 3 cara di bawah, lalu lanjut ke langkah 8.
 
 ## 🧠 Tiga cara pakai AI (pilih satu)
 
-### Cara 1 — Claude Code CLI (langganan Claude kamu sendiri)
-```env
-AI_PROVIDER=claude
-```
-Tes:
-```bash
-claude -p "halo"
-```
-
-### Cara 2 — Claude Code CLI **pakai key AgentRouter**
-Arahkan Claude Code ke AgentRouter (protokol Anthropic, base URL **tanpa** `/v1`):
-```bash
-export ANTHROPIC_AUTH_TOKEN="API_KEY_AGENTROUTER"
-export ANTHROPIC_BASE_URL="https://agentrouter.org"
-export ANTHROPIC_MODEL="claude-opus-4-6"
-```
-Biar permanen, tambahkan ke `~/.bashrc`:
-```bash
-echo 'export ANTHROPIC_AUTH_TOKEN="API_KEY_AGENTROUTER"' >> ~/.bashrc
-echo 'export ANTHROPIC_BASE_URL="https://agentrouter.org"' >> ~/.bashrc
-echo 'export ANTHROPIC_MODEL="claude-opus-4-6"'          >> ~/.bashrc
-source ~/.bashrc
-```
-Tes: `claude -p "halo"` — lalu set `AI_PROVIDER=claude` di `.env`.
-
-> ⚠️ Kalau kamu pernah login akun Claude Pro/Max, env var ini akan menimpa login langganan.
-> Untuk balik: `unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_MODEL`
-
-### Cara 3 — Langsung API AgentRouter (tanpa CLI `claude`)
-Paling ringan, tidak butuh Claude Code sama sekali.
-
-Protokol Anthropic:
+### ⭐ Cara 1 — Langsung API AgentRouter, Claude Opus 5 (paling disarankan)
+Paling ringan, tidak butuh CLI `claude` sama sekali.
 ```env
 AI_PROVIDER=agentrouter-claude
 AGENTROUTER_API_KEY=api_key_kamu
-AGENTROUTER_CLAUDE_MODEL=claude-opus-4-6
+AGENTROUTER_CLAUDE_MODEL=claude-opus-5
 ```
 
-Atau protokol OpenAI-compatible:
+### Cara 2 — AgentRouter protokol OpenAI
 ```env
 AI_PROVIDER=agentrouter
 AGENTROUTER_API_KEY=api_key_kamu
 AGENTROUTER_MODEL=gpt-5.5
 ```
 
-Tes key-nya langsung dari terminal:
+### Cara 3 — Claude Code CLI
+```env
+AI_PROVIDER=claude
+```
+Bisa pakai langganan Claude sendiri, **atau** pakai key AgentRouter dengan mengarahkan Claude Code ke sana (base URL **tanpa** `/v1`):
+```bash
+export ANTHROPIC_AUTH_TOKEN="API_KEY_AGENTROUTER"
+export ANTHROPIC_BASE_URL="https://agentrouter.org"
+export ANTHROPIC_MODEL="claude-opus-5"
+```
+Biar permanen, tambahkan ke `~/.bashrc`:
+```bash
+echo 'export ANTHROPIC_AUTH_TOKEN="API_KEY_AGENTROUTER"' >> ~/.bashrc
+echo 'export ANTHROPIC_BASE_URL="https://agentrouter.org"' >> ~/.bashrc
+echo 'export ANTHROPIC_MODEL="claude-opus-5"'             >> ~/.bashrc
+source ~/.bashrc
+claude -p "halo"
+```
+
+> ⚠️ Kalau kamu pernah login akun Claude Pro/Max, env var ini akan menimpa login langganan.
+> Untuk balik: `unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_MODEL`
+
+---
+
+### 🧪 Tes API key kamu dari terminal
+
+Protokol Anthropic (Claude Opus 5):
+```bash
+curl https://agentrouter.org/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer API_KEY_AGENTROUTER" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-opus-5","max_tokens":64,"messages":[{"role":"user","content":"balas OK saja"}]}'
+```
+
+Protokol OpenAI:
 ```bash
 curl https://agentrouter.org/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -119,7 +125,7 @@ curl https://agentrouter.org/v1/chat/completions \
 
 | Protokol | Base URL | Model |
 |---|---|---|
-| Anthropic | `https://agentrouter.org` (tanpa `/v1`) | `claude-opus-4-6` / `-4-7` / `-4-8` |
+| Anthropic | `https://agentrouter.org` (tanpa `/v1`) | `claude-opus-5` |
 | OpenAI Compatible | `https://agentrouter.org/v1` | `gpt-5.5`, `glm-5.2` |
 
 > Jangan campur kedua base URL tersebut.
@@ -149,7 +155,7 @@ nano .env        # isi seperti langkah di atas
 npm start
 ```
 
-> Kalau `claude` cuma terinstall di Debian (bukan Termux murni), pakai **Opsi A**, atau pakai **Cara 3** (`AI_PROVIDER=agentrouter`) supaya tidak butuh CLI `claude`.
+> Kalau `claude` cuma terinstall di Debian (bukan Termux murni), pakai **Opsi A**, atau pakai **Cara 1** (`AI_PROVIDER=agentrouter-claude`) supaya tidak butuh CLI `claude`.
 
 ---
 
@@ -179,7 +185,7 @@ tail -f bot.log
 ## 🧪 Uji cepat
 1. `/start` — muncul menu
 2. `/wallet` — dapat alamat Smart Account (ZeroDev)
-3. Ketik pesan biasa — dibalas AI
+3. Ketik pesan biasa — dibalas AI (Claude Opus 5)
 4. `/balance` — cek saldo (isi dulu Smart Account-nya di testnet)
 5. `/mint <url>` — wizard mint token
 
@@ -189,9 +195,10 @@ tail -f bot.log
 | Masalah | Solusi |
 |---|---|
 | `Missing required env var: ...` | Ada field wajib di `.env` yang kosong |
-| `claude: command not found` | Pakai Debian (Opsi A) atau pakai Cara 3 (`AI_PROVIDER=agentrouter`) |
+| `claude: command not found` | Pakai Debian (Opsi A) atau pakai Cara 1 (`AI_PROVIDER=agentrouter-claude`) |
 | `AgentRouter 401` | API key salah / habis kuota — cek di agentrouter.org/console/token |
 | `AgentRouter 404` | Base URL ketuker — Anthropic tanpa `/v1`, OpenAI pakai `/v1` |
+| `model not found` | Nama model salah — pakai `claude-opus-5` atau `gpt-5.5` |
 | `node: command not found` | Install ulang nodejs (langkah 2) |
 | Bot diam saja | Cek `ALLOWED_USER_IDS` sudah berisi ID Telegram kamu |
 | Error import ZeroDev | SDK berubah versi — cek https://docs.zerodev.app, sesuaikan `src/wallet/zerodev.ts` |
