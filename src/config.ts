@@ -40,10 +40,8 @@ const chainKey = process.env.CHAIN ?? "base-sepolia";
 const chain = CHAINS[chainKey];
 if (!chain) throw new Error(`Unsupported CHAIN: ${chainKey}`);
 
-// AgentRouter base URLs are FIXED to agentrouter.org by project requirement.
-// OpenAI-compatible uses /v1; Anthropic-compatible does NOT. Never mix them.
-const AGENTROUTER_OPENAI_BASE_URL = "https://agentrouter.org/v1";
-const AGENTROUTER_ANTHROPIC_BASE_URL = "https://agentrouter.org";
+// AgentRouter base URL — exactly this, nothing appended.
+const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
 export const config = {
   telegramToken: req("TELEGRAM_BOT_TOKEN"),
@@ -54,8 +52,8 @@ export const config = {
     .map(Number),
 
   // ---- AI provider selection ----
-  // claude | agentrouter | agentrouter-claude
-  aiProvider: (process.env.AI_PROVIDER ?? "claude") as
+  // agentrouter-claude | agentrouter | claude
+  aiProvider: (process.env.AI_PROVIDER ?? "agentrouter-claude") as
     | "claude"
     | "agentrouter"
     | "agentrouter-claude",
@@ -64,11 +62,10 @@ export const config = {
   claudeCmd: process.env.CLAUDE_CMD ?? "claude",
   claudeArgs: (process.env.CLAUDE_ARGS ?? "-p").split(" ").filter(Boolean),
 
-  // AgentRouter. Base URLs are intentionally hardcoded.
+  // AgentRouter. Base URL is fixed — endpoint paths are added per request.
   agentRouter: {
     apiKey: process.env.AGENTROUTER_API_KEY ?? "",
-    baseUrl: AGENTROUTER_OPENAI_BASE_URL,
-    anthropicBaseUrl: AGENTROUTER_ANTHROPIC_BASE_URL,
+    baseUrl: AGENTROUTER_BASE_URL,
     model: process.env.AGENTROUTER_MODEL ?? "gpt-5.5",
     anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-5",
     maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "8192"),
@@ -84,7 +81,6 @@ export const config = {
   zerodev: {
     projectId: process.env.ZERODEV_PROJECT_ID ?? "",
     rpc: process.env.ZERODEV_RPC ?? "",
-    // Optional overrides; fall back to `rpc` when empty.
     bundlerRpc: process.env.ZERODEV_BUNDLER_RPC ?? "",
     paymasterRpc: process.env.ZERODEV_PAYMASTER_RPC ?? "",
   },

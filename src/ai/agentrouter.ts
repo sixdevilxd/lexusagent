@@ -1,13 +1,13 @@
 import { config } from "../config";
 
 /**
- * AgentRouter (https://agentrouter.org) supports two protocols:
+ * AgentRouter — base URL is ALWAYS exactly:
  *
- *   1. OpenAI Compatible  -> base https://agentrouter.org/v1   (gpt-5.5, glm-5.2)
- *   2. Anthropic Messages -> base https://agentrouter.org       (claude-opus-4-6/4-7/4-8)
+ *     https://agentrouter.org
  *
- * Both base URLs are hardcoded to agentrouter.org by project requirement.
- * Do NOT mix the two (see AgentRouter docs).
+ * Nothing is appended to it in config. The endpoint path is added per request:
+ *   Anthropic protocol   -> /v1/messages          (claude-opus-5)
+ *   OpenAI-compatible    -> /v1/chat/completions  (gpt-5.5, glm-5.2)
  */
 
 function withTimeout(timeoutMs = 120_000) {
@@ -16,48 +16,17 @@ function withTimeout(timeoutMs = 120_000) {
   return { signal: controller.signal, done: () => clearTimeout(timer) };
 }
 
-/** OpenAI-compatible: POST https://agentrouter.org/v1/chat/completions */
-export async function askAgentRouter(
-  prompt: string,
-  opts: { timeoutMs?: number } = {},
-): Promise<string> {
-  const { apiKey, baseUrl, model } = config.agentRouter;
-  if (!apiKey) throw new Error("AGENTROUTER_API_KEY not set in .env");
-
-  const t = withTimeout(opts.timeoutMs);
-  try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: t.signal,
-    });
-
-    if (!res.ok) throw new Error(`AgentRouter ${res.status}: ${await res.text()}`);
-    const data: any = await res.json();
-    return data.choices?.[0]?.message?.content?.trim() ?? "(no output)";
-  } finally {
-    t.done();
-  }
-}
-
-/** Anthropic-compatible: POST https://agentrouter.org/v1/messages (Bearer auth). */
+/** Anthropic protocol (default) — Claude Opus 5. */
 export async function askAgentRouterAnthropic(
   prompt: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<string> {
-  const { apiKey, anthropicBaseUrl, anthropicModel, maxTokens } = config.agentRouter;
+  const { apiKey, baseUrl, anthropicModel, maxTokens } = config.agentRouter;
   if (!apiKey) throw new Error("AGENTROUTER_API_KEY not set in .env");
 
   const t = withTimeout(opts.timeoutMs);
   try {
-    const res = await fetch(`${anthropicBaseUrl}/v1/messages`, {
+    const res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -80,6 +49,37 @@ export async function askAgentRouterAnthropic(
       ? data.content.map((c: any) => c?.text ?? "").join("").trim()
       : "";
     return text || "(no output)";
+  } finally {
+    t.done();
+  }
+}
+
+/** OpenAI-compatible protocol — gpt-5.5 / glm-5.2. */
+export async function askAgentRouter(
+  prompt: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<string> {
+  const { apiKey, baseUrl, model } = config.agentRouter;
+  if (!apiKey) throw new Error("AGENTROUTER_API_KEY not set in .env");
+
+  const t = withTimeout(opts.timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: t.signal,
+    });
+
+    if (!res.ok) throw new Error(`AgentRouter ${res.status}: ${await res.text()}`);
+    const data: any = await res.json();
+    return data.choices?.[0]?.message?.content?.trim() ?? "(no output)";
   } finally {
     t.done();
   }
