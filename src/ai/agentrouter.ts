@@ -7,9 +7,9 @@ import { SYSTEM_PROMPT } from "./prompt";
  *   Anthropic protocol -> /v1/messages
  *   OpenAI-compatible  -> /v1/chat/completions
  *
- * Streaming is used everywhere: the first token arrives in ~1s and the
- * connection stays alive, so long answers never hit a request timeout.
- * Only a *stall* (no bytes for `idleMs`) aborts the request.
+ * Streaming keeps the connection alive so long answers never hit a request
+ * timeout; only a stall (no bytes for `idleMs`) aborts. If the upstream ignores
+ * `stream: true` and returns plain JSON, we transparently fall back to it.
  */
 
 type StreamOpts = { idleMs?: number };
@@ -45,6 +45,10 @@ async function* sseLines(res: Response, guard: ReturnType<typeof idleGuard>) {
   if (buf.trim()) yield buf.trim();
 }
 
+function isEventStream(res: Response): boolean {
+  return (res.headers.get("content-type") ?? "").includes("event-stream");
+}
+
 /** Anthropic protocol streaming — Claude Opus 5. */
 export async function streamAgentRouterAnthropic(
   prompt: string,
@@ -75,6 +79,21 @@ export async function streamAgentRouterAnthropic(
 
     if (!res.ok || !res.body) {
       throw new Error(`AgentRouter ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+
+    // Fallback: upstream ignored `stream: true` and sent a normal JSON body.
+    if (!isEventStream(res)) {
+      const raw = await res.text();
+      let text = "";
+      try {
+        const j = JSON.parse(raw);
+        text = (j.content ?? []).map((c: any) => c?.text ?? "").join("");
+      } catch {
+        text = raw;
+      }
+      text = text.trim();
+      if (text) onDelta(text);
+      return text;
     }
 
     let full = "";
@@ -130,6 +149,19 @@ export async function streamAgentRouter(
 
     if (!res.ok || !res.body) {
       throw new Error(`AgentRouter ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+
+    if (!isEventStream(res)) {
+      const raw = await res.text();
+      let text = "";
+      try {
+        text = JSON.parse(raw).choices?.[0]?.message?.content ?? "";
+      } catch {
+        text = raw;
+      }
+      text = text.trim();
+      if (text) onDelta(text);
+      return text;
     }
 
     let full = "";
