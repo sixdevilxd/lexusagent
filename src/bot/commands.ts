@@ -91,7 +91,6 @@ async function githubConnect(ctx: Context): Promise<void> {
       { parse_mode: "Markdown", link_preview_options: { is_disabled: true } },
     );
 
-    // Poll in the background so the bot stays responsive.
     void (async () => {
       try {
         const token = await pollForToken(dc.device_code, dc.interval, dc.expires_in);
@@ -119,14 +118,12 @@ export function registerHandlers(bot: Bot): void {
     const model =
       config.aiProvider === "agentrouter"
         ? config.agentRouter.model
-        : config.aiProvider === "agentrouter-claude"
-          ? config.agentRouter.anthropicModel
-          : `${config.claudeCmd} ${config.claudeArgs.join(" ")}`;
+        : config.agentRouter.anthropicModel;
     const gh = getLogin(ctx.from!.id);
     await ctx.reply(
       "🩺 *Status*\n\n" +
-        `AI provider: *${config.aiProvider}*\n` +
-        `Model: *${model}*\n` +
+        `AI: *${model}* via AgentRouter\n` +
+        `Protocol: ${config.aiProvider === "agentrouter" ? "OpenAI-compatible" : "Anthropic"}\n` +
         `AgentRouter key: ${config.agentRouter.apiKey ? "✅ set" : "❌ not set"}\n` +
         `GitHub: ${gh ? `✅ ${gh}` : "❌ not connected"}\n` +
         `Chain: *${config.chainKey}*\n` +
@@ -262,10 +259,10 @@ async function askAndReply(ctx: Context, prompt: string): Promise<void> {
   const t0 = Date.now();
   try {
     const answer = await ask(prompt);
-    console.log(`[ai] ${config.aiProvider} replied in ${Date.now() - t0}ms`);
+    console.log(`[ai] replied in ${Date.now() - t0}ms`);
     await replyLong(ctx, answer || "(no output)");
   } catch (e: any) {
-    console.error(`[ai error] provider=${config.aiProvider}`, e);
-    await ctx.reply(`❌ AI error (${config.aiProvider}): ${e.message}`);
+    console.error("[ai error]", e);
+    await ctx.reply(`❌ AI error: ${e.message}`);
   }
 }
