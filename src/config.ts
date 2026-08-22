@@ -9,8 +9,6 @@ function req(name: string): string {
 }
 
 // Friendly .env aliases -> viem chain export names.
-// Any viem chain export name also works directly (e.g. CHAIN=berachain),
-// as does a raw chain id (e.g. CHAIN=8453).
 const CHAIN_ALIASES: Record<string, string> = {
   eth: "mainnet",
   ethereum: "mainnet",
@@ -43,7 +41,6 @@ function resolveChain(key: string): Chain | undefined {
   const isChain = (c: any): c is Chain =>
     c && typeof c === "object" && typeof c.id === "number";
 
-  // Numeric chain id, e.g. CHAIN=8453
   if (/^\d+$/.test(key)) {
     const id = Number(key);
     return Object.values(all).find((c) => isChain(c) && c.id === id);
@@ -53,7 +50,6 @@ function resolveChain(key: string): Chain | undefined {
   const direct = all[name];
   if (isChain(direct)) return direct;
 
-  // Last resort: case-insensitive match on the export name
   const found = Object.entries(all).find(
     ([k, v]) => k.toLowerCase() === name.toLowerCase() && isChain(v),
   );
@@ -70,15 +66,11 @@ if (!chain) {
   );
 }
 
-// Derived from the chain definition — works for every supported network.
 const explorerBase = chain.blockExplorers?.default?.url ?? "";
 const explorerTx = explorerBase ? `${explorerBase.replace(/\/$/, "")}/tx/` : "";
 
-// RPC_URL is optional — fall back to the chain's public RPC.
 const rpcUrl = process.env.RPC_URL || chain.rpcUrls.default.http[0];
 
-// ZeroDev API v3 RPC is built automatically from the project id + chain id,
-// which prevents "chain mismatch" mistakes. An explicit ZERODEV_RPC wins.
 const zerodevProjectId = process.env.ZERODEV_PROJECT_ID ?? "";
 const zerodevRpc =
   process.env.ZERODEV_RPC ||
@@ -89,7 +81,6 @@ const zerodevRpc =
 // AgentRouter base URL — exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
-// The AI always runs on the AgentRouter API key.
 const rawProvider = (process.env.AI_PROVIDER ?? "agentrouter-claude").trim();
 const aiProvider: "agentrouter-claude" | "agentrouter" =
   rawProvider === "agentrouter" ? "agentrouter" : "agentrouter-claude";
@@ -127,14 +118,17 @@ export const config = {
     .filter(Boolean)
     .map(Number),
 
-  // ---- AI (AgentRouter only) ----
+  // ---- AI (AgentRouter only, always streaming) ----
   aiProvider,
   agentRouter: {
     apiKey: process.env.AGENTROUTER_API_KEY ?? "",
     baseUrl: AGENTROUTER_BASE_URL,
     model: process.env.AGENTROUTER_MODEL ?? "gpt-5.5",
     anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-5",
-    maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "8192"),
+    // Cap, not a target. 4096 is plenty for chat + code and keeps replies snappy.
+    maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "4096"),
+    // Streaming means there is no total timeout — only a stall (no bytes) aborts.
+    idleMs: Number(process.env.AI_IDLE_TIMEOUT_MS ?? "60000"),
   },
 
   // ---- GitHub OAuth (Device Flow) ----
