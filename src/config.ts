@@ -1,6 +1,7 @@
 import "dotenv/config";
 import * as viemChains from "viem/chains";
 import type { Chain } from "viem";
+import { DEX_PRESETS } from "./wallet/presets";
 
 function req(name: string): string {
   const v = process.env[name];
@@ -8,7 +9,6 @@ function req(name: string): string {
   return v;
 }
 
-// Friendly .env aliases -> viem chain export names.
 const CHAIN_ALIASES: Record<string, string> = {
   eth: "mainnet",
   ethereum: "mainnet",
@@ -56,7 +56,7 @@ function resolveChain(key: string): Chain | undefined {
   return found?.[1];
 }
 
-const chainKey = (process.env.CHAIN ?? "base-sepolia").trim();
+const chainKey = (process.env.CHAIN ?? "base").trim();
 const chain = resolveChain(chainKey);
 if (!chain) {
   throw new Error(
@@ -77,6 +77,9 @@ const zerodevRpc =
   (zerodevProjectId
     ? `https://rpc.zerodev.app/api/v3/${zerodevProjectId}/chain/${chain.id}`
     : "");
+
+// Uniswap V3 addresses for this chain, overridable via env.
+const preset = DEX_PRESETS[chain.id];
 
 // AgentRouter base URL — exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
@@ -125,9 +128,7 @@ export const config = {
     baseUrl: AGENTROUTER_BASE_URL,
     model: process.env.AGENTROUTER_MODEL ?? "gpt-5.5",
     anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-5",
-    // Cap, not a target. 4096 is plenty for chat + code and keeps replies snappy.
     maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "4096"),
-    // Streaming means there is no total timeout — only a stall (no bytes) aborts.
     idleMs: Number(process.env.AI_IDLE_TIMEOUT_MS ?? "60000"),
   },
 
@@ -157,9 +158,10 @@ export const config = {
   // ---- Security ----
   walletEncryptionKey: req("WALLET_ENCRYPTION_KEY"),
 
-  // ---- Trading ----
-  dexRouter: (process.env.DEX_ROUTER ?? "") as `0x${string}`,
-  wethAddress: (process.env.WETH_ADDRESS ?? "") as `0x${string}`,
+  // ---- Trading (Uniswap V3, auto-filled per chain) ----
+  dexRouter: (process.env.DEX_ROUTER || preset?.router || "") as `0x${string}`,
+  quoter: (process.env.QUOTER_ADDRESS || preset?.quoter || "") as `0x${string}`,
+  wethAddress: (process.env.WETH_ADDRESS || preset?.weth || "") as `0x${string}`,
   slippageBps: Number(process.env.DEFAULT_SLIPPAGE_BPS ?? "100"),
 
   // ---- Token Mint / Launchpad ----
