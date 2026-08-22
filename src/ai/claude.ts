@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { config } from "../config";
+import { SYSTEM_PROMPT } from "./prompt";
 
 /**
  * Ask the local Claude Code CLI a question in headless/print mode.
@@ -10,7 +11,10 @@ export async function askClaude(
   opts: { timeoutMs?: number } = {},
 ): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? 120_000;
-  const args = [...config.claudeArgs, prompt];
+  // The CLI has no separate system-prompt input we can rely on across versions,
+  // so we prepend it to the prompt.
+  const full = `${SYSTEM_PROMPT}\n\n---\n\n${prompt}`;
+  const args = [...config.claudeArgs, full];
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(config.claudeCmd, args, { env: process.env });

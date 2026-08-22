@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { SYSTEM_PROMPT } from "./prompt";
 
 /**
  * AgentRouter — base URL is ALWAYS exactly:
@@ -30,14 +31,13 @@ export async function askAgentRouterAnthropic(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // AgentRouter expects the key as a Bearer token (same as Claude Code's
-        // ANTHROPIC_AUTH_TOKEN behaviour).
         Authorization: `Bearer ${apiKey}`,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
         model: anthropicModel,
         max_tokens: maxTokens,
+        system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: prompt }],
       }),
       signal: t.signal,
@@ -72,7 +72,10 @@ export async function askAgentRouter(
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
       }),
       signal: t.signal,
     });
