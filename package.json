@@ -1,7 +1,7 @@
 {
   "name": "lexusagent",
   "version": "0.1.0",
-  "description": "AI trading agent on Telegram — Claude Code brain + ZeroDev smart accounts (wallet, buy/sell, balance, transactions).",
+  "description": "AI trading agent on Telegram — Claude Opus 5 brain + ZeroDev smart accounts (wallet, buy/sell, balance, transactions, mint).",
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
@@ -13,6 +13,7 @@
     "@zerodev/sdk": "^5.4.32",
     "dotenv": "^16.4.5",
     "grammy": "^1.30.0",
+    "tslib": "^2.8.1",
     "tsx": "^4.19.2",
     "viem": "^2.21.45"
   },

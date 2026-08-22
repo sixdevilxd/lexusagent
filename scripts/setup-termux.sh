@@ -23,13 +23,23 @@ if [ ! -f .env ]; then
   echo "Created .env — edit it with your tokens before running."
 fi
 
-# 4. Data dir for encrypted wallet storage
+# 4. Auto-generate the wallet encryption key if it's still empty
+if ! grep -q '^WALLET_ENCRYPTION_KEY=.\+' .env; then
+  KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+  if grep -q '^WALLET_ENCRYPTION_KEY=' .env; then
+    sed -i "s|^WALLET_ENCRYPTION_KEY=.*|WALLET_ENCRYPTION_KEY=$KEY|" .env
+  else
+    echo "WALLET_ENCRYPTION_KEY=$KEY" >> .env
+  fi
+  echo "Generated WALLET_ENCRYPTION_KEY (back this up — wallets are unrecoverable without it)."
+fi
+
+# 5. Data dir for encrypted wallet storage
 mkdir -p data
 chmod 700 data
 
 echo ""
 echo "✅ Setup done."
 echo "Next:"
-echo "  1) Edit .env (TELEGRAM_BOT_TOKEN, WALLET_ENCRYPTION_KEY, ZeroDev keys...)"
-echo "  2) Make sure 'claude' works:  claude -p 'hello'"
-echo "  3) Run:  npm start"
+echo "  1) Edit .env (TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, AGENTROUTER_API_KEY, ZERODEV_RPC...)"
+echo "  2) Run:  npm start"
