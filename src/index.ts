@@ -36,21 +36,20 @@ bot.catch((err) => {
 
 // ---- startup sanity checks ----
 const isClaudeModel = (m: string) => /claude/i.test(m);
+const mask = (u: string) => u.replace(/\/api\/v3\/[^/]+/, "/api/v3/***");
 
 if (!config.agentRouter.apiKey) {
   console.error(
     "❌ AGENTROUTER_API_KEY is empty — the AI cannot reply.\n" +
-      "   Get a key at https://agentrouter.org/console/token and put it in .env",
+      "   Get a key at https://agentrouter.org/console/token",
   );
 }
 
-// Protocol / model mismatch — Claude models only work on the Anthropic endpoint.
 if (config.aiProvider === "agentrouter" && isClaudeModel(config.agentRouter.model)) {
   console.error(
     `❌ MISMATCH: AGENTROUTER_MODEL="${config.agentRouter.model}" is a Claude model,\n` +
       "   but AI_PROVIDER=agentrouter uses the OpenAI-compatible endpoint.\n" +
-      "   Fix: set AI_PROVIDER=agentrouter-claude (and AGENTROUTER_CLAUDE_MODEL=claude-opus-5),\n" +
-      "        or set AGENTROUTER_MODEL=gpt-5.5",
+      "   Fix: AI_PROVIDER=agentrouter-claude   (or AGENTROUTER_MODEL=gpt-5.5)",
   );
 }
 if (
@@ -59,8 +58,7 @@ if (
 ) {
   console.error(
     `❌ MISMATCH: AGENTROUTER_CLAUDE_MODEL="${config.agentRouter.anthropicModel}" is not a Claude model,\n` +
-      "   but AI_PROVIDER=agentrouter-claude uses the Anthropic endpoint.\n" +
-      "   Fix: set AGENTROUTER_CLAUDE_MODEL=claude-opus-5, or use AI_PROVIDER=agentrouter",
+      "   but AI_PROVIDER=agentrouter-claude uses the Anthropic endpoint.",
   );
 }
 
@@ -69,18 +67,32 @@ if (!config.allowedUserIds.length) {
 }
 if (!config.zerodev.rpc) {
   console.error(
-    "❌ ZERODEV_PROJECT_ID is empty — /wallet, /balance, /buy, /sell and /mint WILL FAIL.\n" +
-      "   Public RPCs strip revert data, which breaks smart-account derivation.\n" +
-      "   Get a project id at https://dashboard.zerodev.app (see ZERODEV.md).",
+    "❌ ZERODEV_PROJECT_ID is empty — wallet & trading commands WILL FAIL.\n" +
+      "   Public RPCs strip revert data, which breaks smart-account derivation.",
+  );
+}
+if (!config.dexRouter || !config.quoter) {
+  console.warn(
+    `⚠️  No Uniswap V3 preset for chain ${config.chainId} — set DEX_ROUTER, QUOTER_ADDRESS and WETH_ADDRESS to trade.`,
   );
 }
 if (!config.github.clientId) {
   console.warn("⚠️  GITHUB_CLIENT_ID is empty — /github will not work (see GITHUB.md).");
 }
+
+// Chain sanity: an explicit RPC_URL that points at a different network is a
+// common copy-paste mistake after switching CHAIN.
+if (process.env.RPC_URL && /sepolia|testnet|goerli|amoy|fuji/i.test(process.env.RPC_URL) && !config.isTestnet) {
+  console.error(
+    `❌ RPC_URL looks like a testnet endpoint (${config.rpcUrl}) but CHAIN=${config.chainKey} is mainnet.\n` +
+      "   Clear RPC_URL in .env to use the chain default.",
+  );
+}
+
 if (!config.isTestnet) {
   console.warn(
-    `❗ MAINNET MODE: ${config.chainName} (id ${config.chainId}). Real funds are at risk.\n` +
-      "   Slippage protection is not implemented (amountOutMinimum = 0) — see README before trading.",
+    `❗ MAINNET: ${config.chainName} (id ${config.chainId}) — real funds.\n` +
+      `   Slippage cap: ${config.slippageBps / 100}% (QuoterV2 enforced).`,
   );
 }
 
@@ -94,10 +106,8 @@ console.log(`   AI    : ${activeModel} via AgentRouter (${config.aiProvider})`);
 console.log(
   `   Chain : ${config.chainName} (id ${config.chainId})${config.isTestnet ? " [testnet]" : " [MAINNET]"}`,
 );
-console.log(
-  `   RPC   : ${config.rpcUrl.replace(/\/api\/v3\/[^/]+/, "/api/v3/***")}` +
-    (config.zerodev.rpc ? "" : "   ⚠️  not a ZeroDev RPC"),
-);
+console.log(`   RPC   : ${mask(config.rpcUrl)}`);
+console.log(`   AA RPC: ${config.zerodev.rpc ? mask(config.zerodev.rpc) : "— not set"}`);
 
 void bot.start({
   drop_pending_updates: true,
