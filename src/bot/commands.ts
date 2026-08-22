@@ -2,12 +2,16 @@ import type { Bot, Context } from "grammy";
 import type { Address } from "viem";
 import { config } from "../config";
 import { mainMenu } from "./keyboards";
+import { replyLong } from "./reply";
 import { ask } from "../ai";
 import { createWallet, getEoaAddress, hasWallet } from "../wallet/store";
 import { getKernelClient } from "../wallet/zerodev";
 import { getBalances, buyToken, sellToken } from "../wallet/trade";
 import { getTxs } from "../wallet/history";
 import { startMint, handleMintInput, registerMintCallbacks } from "../mint/flow";
+import { startDeviceFlow, pollForToken } from "../github/oauth";
+import { saveToken, getToken, getLogin, clearToken } from "../github/store";
+import { getViewer, listRepos } from "../github/client";
 
 async function showWallet(ctx: Context): Promise<void> {
   const uid = ctx.from!.id;
@@ -50,6 +54,61 @@ async function showTxs(ctx: Context): Promise<void> {
   });
 }
 
+// ---------- GitHub ----------
+async function githubStatus(ctx: Context): Promise<void> {
+  const uid = ctx.from!.id;
+  const token = getToken(uid);
+  if (!token) {
+    await ctx.reply("❌ GitHub not connected.\nSend /github to connect.");
+    return;
+  }
+  try {
+    const user = await getViewer(token);
+    const repos = await listRepos(token, 5);
+    const list = repos.map((r: any) => `• ${r.full_name}`).join("\n") || "_none_";
+    await ctx.reply(
+      `✅ *GitHub connected*\n\nAccount: *${user.login}*\nPublic repos: ${user.public_repos}\nAccess: full\n\n*Recently updated:*\n${list}`,
+      { parse_mode: "Markdown", link_preview_options: { is_disabled: true } },
+    );
+  } catch (e: any) {
+    await ctx.reply(`⚠️ Token invalid or revoked: ${e.message}\nSend /github to reconnect.`);
+  }
+}
+
+async function githubConnect(ctx: Context): Promise<void> {
+  const uid = ctx.from!.id;
+  if (getToken(uid)) {
+    await ctx.reply(
+      `Already connected as *${getLogin(uid)}*.\nUse /github status or /github logout.`,
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+  try {
+    const dc = await startDeviceFlow();
+    await ctx.reply(
+      `🔗 *Connect GitHub*\n\n1️⃣ Open: ${dc.verification_uri}\n2️⃣ Enter this code:\n\n\`${dc.user_code}\`\n\n_Waiting for authorization (expires in ${Math.floor(dc.expires_in / 60)} min)..._`,
+      { parse_mode: "Markdown", link_preview_options: { is_disabled: true } },
+    );
+
+    // Poll in the background so the bot stays responsive.
+    void (async () => {
+      try {
+        const token = await pollForToken(dc.device_code, dc.interval, dc.expires_in);
+        const user = await getViewer(token);
+        saveToken(uid, token, user.login);
+        console.log(`[github] connected user ${uid} as ${user.login}`);
+        await ctx.reply(`✅ GitHub connected as *${user.login}*`, { parse_mode: "Markdown" });
+      } catch (e: any) {
+        console.error("[github] connect failed", e);
+        await ctx.reply(`❌ GitHub connect failed: ${e.message}`);
+      }
+    })();
+  } catch (e: any) {
+    await ctx.reply(`❌ ${e.message}`);
+  }
+}
+
 export function registerHandlers(bot: Bot): void {
   // ---- diagnostics ----
   bot.command("ping", async (ctx) => {
@@ -63,11 +122,13 @@ export function registerHandlers(bot: Bot): void {
         : config.aiProvider === "agentrouter-claude"
           ? config.agentRouter.anthropicModel
           : `${config.claudeCmd} ${config.claudeArgs.join(" ")}`;
+    const gh = getLogin(ctx.from!.id);
     await ctx.reply(
       "🩺 *Status*\n\n" +
         `AI provider: *${config.aiProvider}*\n` +
         `Model: *${model}*\n` +
         `AgentRouter key: ${config.agentRouter.apiKey ? "✅ set" : "❌ not set"}\n` +
+        `GitHub: ${gh ? `✅ ${gh}` : "❌ not connected"}\n` +
         `Chain: *${config.chainKey}*\n` +
         `ZeroDev RPC: ${config.zerodev.rpc ? "✅ set" : "❌ not set"}\n` +
         `Allowlist: ${config.allowedUserIds.length ? `${config.allowedUserIds.length} user(s)` : "open to everyone"}\n` +
@@ -76,18 +137,35 @@ export function registerHandlers(bot: Bot): void {
     );
   });
 
-  bot.command("ai", async (ctx) => {
-    const q = (ctx.match || "").trim();
-    if (!q) {
-      await ctx.reply("Usage: /ai <your question>");
+  // ---- GitHub (the only integration exposed as a command) ----
+  bot.command("github", async (ctx) => {
+    const arg = (ctx.match || "").trim().toLowerCase();
+    if (arg === "logout" || arg === "disconnect") {
+      clearToken(ctx.from!.id);
+      await ctx.reply("🔌 GitHub disconnected.");
       return;
     }
-    await askAndReply(ctx, q);
+    if (arg === "status") {
+      await githubStatus(ctx);
+      return;
+    }
+    await githubConnect(ctx);
   });
 
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "🚗 *lexusagent*\nAI trading agent powered by Claude Opus 5 + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/ping — check the bot is alive\n/status — show configuration\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/mint [url] — create a token (confirm before signing)\n/tx — recent transactions",
+      "🚗 *lexusagent*\nAI coding + trading agent powered by Claude Opus 5.\n\n" +
+        "💬 *Just type anything* — I can write, debug and explain code in any language. No command needed.\n\n" +
+        "Commands:\n" +
+        "/github — connect your GitHub account\n" +
+        "/ping — check the bot is alive\n" +
+        "/status — show configuration\n" +
+        "/wallet — show/create wallet\n" +
+        "/balance [token] — check balance\n" +
+        "/buy <token> <amount> — buy\n" +
+        "/sell <token> <amount> — sell\n" +
+        "/mint [url] — create a token (confirm before signing)\n" +
+        "/tx — recent transactions",
       { parse_mode: "Markdown", reply_markup: mainMenu },
     );
   });
@@ -168,10 +246,10 @@ export function registerHandlers(bot: Bot): void {
   });
   bot.callbackQuery("ai_help", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.reply("🤖 Just type any message and I'll pass it to the AI.");
+    await ctx.reply("🤖 Just type any message — code, bugs, questions. No command needed.");
   });
 
-  // Any non-command text => mint wizard (if active) else AI brain
+  // Any non-command text => mint wizard (if active) else the AI brain
   bot.on("message:text", async (ctx) => {
     if (ctx.message.text.startsWith("/")) return;
     if (await handleMintInput(ctx, ctx.message.text)) return;
@@ -185,7 +263,7 @@ async function askAndReply(ctx: Context, prompt: string): Promise<void> {
   try {
     const answer = await ask(prompt);
     console.log(`[ai] ${config.aiProvider} replied in ${Date.now() - t0}ms`);
-    await ctx.reply(answer || "(no output)");
+    await replyLong(ctx, answer || "(no output)");
   } catch (e: any) {
     console.error(`[ai error] provider=${config.aiProvider}`, e);
     await ctx.reply(`❌ AI error (${config.aiProvider}): ${e.message}`);

@@ -43,6 +43,27 @@ if (!chain) throw new Error(`Unsupported CHAIN: ${chainKey}`);
 // AgentRouter base URL — exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
+// Full-access GitHub OAuth scopes.
+const GITHUB_FULL_SCOPES = [
+  "repo",
+  "workflow",
+  "write:packages",
+  "delete:packages",
+  "admin:org",
+  "admin:public_key",
+  "admin:repo_hook",
+  "admin:org_hook",
+  "gist",
+  "notifications",
+  "user",
+  "delete_repo",
+  "write:discussion",
+  "admin:gpg_key",
+  "admin:ssh_signing_key",
+  "project",
+  "codespace",
+].join(",");
+
 export const config = {
   telegramToken: req("TELEGRAM_BOT_TOKEN"),
   allowedUserIds: (process.env.ALLOWED_USER_IDS ?? "")
@@ -58,7 +79,6 @@ export const config = {
     | "agentrouter"
     | "agentrouter-claude",
 
-  // Claude Code CLI
   claudeCmd: process.env.CLAUDE_CMD ?? "claude",
   claudeArgs: (process.env.CLAUDE_ARGS ?? "-p").split(" ").filter(Boolean),
 
@@ -69,6 +89,12 @@ export const config = {
     model: process.env.AGENTROUTER_MODEL ?? "gpt-5.5",
     anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-5",
     maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "8192"),
+  },
+
+  // ---- GitHub OAuth (Device Flow) ----
+  github: {
+    clientId: process.env.GITHUB_CLIENT_ID ?? "",
+    scopes: process.env.GITHUB_SCOPES ?? GITHUB_FULL_SCOPES,
   },
 
   // ---- Chain / RPC ----
