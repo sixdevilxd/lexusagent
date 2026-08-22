@@ -86,4 +86,10 @@ export const config = {
   dexRouter: (process.env.DEX_ROUTER ?? "") as `0x${string}`,
   wethAddress: (process.env.WETH_ADDRESS ?? "") as `0x${string}`,
   slippageBps: Number(process.env.DEFAULT_SLIPPAGE_BPS ?? "100"),
+
+  // ---- Token Mint / Launchpad ----
+  mint: {
+    factory: (process.env.TOKEN_FACTORY_ADDRESS ?? "") as `0x${string}`,
+    creationFeeEth: process.env.MINT_CREATION_FEE_ETH ?? "",
+  },
 } as const;

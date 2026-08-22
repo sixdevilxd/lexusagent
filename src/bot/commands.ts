@@ -7,6 +7,7 @@ import { createWallet, getEoaAddress, hasWallet } from "../wallet/store";
 import { getKernelClient } from "../wallet/zerodev";
 import { getBalances, buyToken, sellToken } from "../wallet/trade";
 import { getTxs } from "../wallet/history";
+import { startMint, handleMintInput, registerMintCallbacks } from "../mint/flow";
 
 async function showWallet(ctx: Context): Promise<void> {
   const uid = ctx.from!.id;
@@ -52,7 +53,7 @@ async function showTxs(ctx: Context): Promise<void> {
 export function registerHandlers(bot: Bot): void {
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "🚗 *lexusagent*\nAI trading agent powered by Claude Code / AgentRouter + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/tx — recent transactions",
+      "🚗 *lexusagent*\nAI trading agent powered by Claude Code / AgentRouter + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/mint [url] — create a token (AI reads target + confirm to sign)\n/tx — recent transactions",
       { parse_mode: "Markdown", reply_markup: mainMenu },
     );
   });
@@ -106,6 +107,17 @@ export function registerHandlers(bot: Bot): void {
     }
   });
 
+  // ---- Mint wizard ----
+  bot.command("mint", async (ctx) => {
+    const url = (ctx.match || "").trim();
+    await startMint(ctx, url || undefined);
+  });
+  bot.callbackQuery("mint_menu", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await startMint(ctx);
+  });
+  registerMintCallbacks(bot);
+
   bot.command("tx", showTxs);
   bot.callbackQuery("tx", async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -125,9 +137,10 @@ export function registerHandlers(bot: Bot): void {
     await ctx.reply("🤖 Just type any message and I'll pass it to the AI.");
   });
 
-  // Any non-command text => AI brain (Claude Code or AgentRouter)
+  // Any non-command text => mint wizard (if active) else AI brain
   bot.on("message:text", async (ctx) => {
     if (ctx.message.text.startsWith("/")) return;
+    if (await handleMintInput(ctx, ctx.message.text)) return;
     await ctx.replyWithChatAction("typing");
     try {
       const answer = await ask(ctx.message.text);

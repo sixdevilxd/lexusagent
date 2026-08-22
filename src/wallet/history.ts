@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 const FILE = join(process.cwd(), "data", "tx.json");
 
 export type Tx = {
-  type: "buy" | "sell";
+  type: "buy" | "sell" | "mint";
   token: string;
   amount: string;
   txHash: string;

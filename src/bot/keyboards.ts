@@ -7,5 +7,7 @@ export const mainMenu = new InlineKeyboard()
   .text("🟢 Buy", "buy_help")
   .text("🔴 Sell", "sell_help")
   .row()
+  .text("🪙 Mint Token", "mint_menu")
+  .row()
   .text("📜 Transactions", "tx")
   .text("🤖 Ask AI", "ai_help");
