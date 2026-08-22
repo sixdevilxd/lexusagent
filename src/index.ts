@@ -45,10 +45,18 @@ if (!config.allowedUserIds.length) {
   console.warn("⚠️  ALLOWED_USER_IDS is empty — anyone who finds the bot can use it.");
 }
 if (!config.zerodev.rpc) {
-  console.warn("⚠️  ZERODEV_RPC is empty — /wallet, /balance, /buy, /sell, /mint will fail.");
+  console.warn(
+    "⚠️  ZeroDev not configured — set ZERODEV_PROJECT_ID in .env, or /wallet, /balance, /buy, /sell and /mint will fail.",
+  );
 }
 if (!config.github.clientId) {
   console.warn("⚠️  GITHUB_CLIENT_ID is empty — /github will not work (see GITHUB.md).");
+}
+if (!config.isTestnet) {
+  console.warn(
+    `❗ MAINNET MODE: ${config.chainName} (id ${config.chainId}). Real funds are at risk.\n` +
+      "   Slippage protection is not implemented (amountOutMinimum = 0) — see README before trading.",
+  );
 }
 
 const activeModel =
@@ -57,8 +65,11 @@ const activeModel =
     : config.agentRouter.anthropicModel;
 
 console.log("🚗 lexusagent starting...");
-console.log(`   AI     : ${activeModel} via AgentRouter (${config.aiProvider})`);
-console.log(`   Chain  : ${config.chainKey}`);
+console.log(`   AI    : ${activeModel} via AgentRouter (${config.aiProvider})`);
+console.log(
+  `   Chain : ${config.chainName} (id ${config.chainId})${config.isTestnet ? " [testnet]" : " [MAINNET]"}`,
+);
+console.log(`   RPC   : ${config.rpcUrl}`);
 
 void bot.start({
   drop_pending_updates: true,
