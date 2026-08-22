@@ -60,15 +60,12 @@ const chainKey = (process.env.CHAIN ?? "base").trim();
 const chain = resolveChain(chainKey);
 if (!chain) {
   throw new Error(
-    `Unsupported CHAIN: "${chainKey}".\n` +
-      `Use a viem chain name (base, arbitrum, polygon, bsc, avalanche, linea, scroll, ...),\n` +
-      `an alias (base-sepolia, arbitrum-sepolia, ...), or a numeric chain id (e.g. 8453).`,
+    `Unsupported CHAIN: "${chainKey}". Use a viem chain name, an alias, or a numeric chain id.`,
   );
 }
 
 const explorerBase = chain.blockExplorers?.default?.url ?? "";
 const explorerTx = explorerBase ? `${explorerBase.replace(/\/$/, "")}/tx/` : "";
-
 const rpcUrl = process.env.RPC_URL || chain.rpcUrls.default.http[0];
 
 const zerodevProjectId = process.env.ZERODEV_PROJECT_ID ?? "";
@@ -78,10 +75,8 @@ const zerodevRpc =
     ? `https://rpc.zerodev.app/api/v3/${zerodevProjectId}/chain/${chain.id}`
     : "");
 
-// Uniswap V3 addresses for this chain, overridable via env.
 const preset = DEX_PRESETS[chain.id];
 
-// AgentRouter base URL — exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
 const rawProvider = (process.env.AI_PROVIDER ?? "agentrouter-claude").trim();
@@ -89,7 +84,7 @@ const aiProvider: "agentrouter-claude" | "agentrouter" =
   rawProvider === "agentrouter" ? "agentrouter" : "agentrouter-claude";
 if (rawProvider !== aiProvider) {
   console.warn(
-    `[config] AI_PROVIDER="${rawProvider}" is no longer supported — using "${aiProvider}" (AgentRouter API).`,
+    `[config] AI_PROVIDER="${rawProvider}" is no longer supported - using "${aiProvider}".`,
   );
 }
 
@@ -121,7 +116,6 @@ export const config = {
     .filter(Boolean)
     .map(Number),
 
-  // ---- AI (AgentRouter only, always streaming) ----
   aiProvider,
   agentRouter: {
     apiKey: process.env.AGENTROUTER_API_KEY ?? "",
@@ -132,13 +126,11 @@ export const config = {
     idleMs: Number(process.env.AI_IDLE_TIMEOUT_MS ?? "60000"),
   },
 
-  // ---- GitHub OAuth (Device Flow) ----
   github: {
     clientId: process.env.GITHUB_CLIENT_ID ?? "",
     scopes: process.env.GITHUB_SCOPES || GITHUB_FULL_SCOPES,
   },
 
-  // ---- Chain / RPC ----
   chainKey,
   chain,
   chainId: chain.id,
@@ -147,7 +139,6 @@ export const config = {
   explorerTx,
   rpcUrl,
 
-  // ---- ZeroDev (API v3: one RPC serves bundler + paymaster) ----
   zerodev: {
     projectId: zerodevProjectId,
     rpc: zerodevRpc,
@@ -155,16 +146,18 @@ export const config = {
     paymasterRpc: process.env.ZERODEV_PAYMASTER_RPC ?? "",
   },
 
-  // ---- Security ----
   walletEncryptionKey: req("WALLET_ENCRYPTION_KEY"),
 
-  // ---- Trading (Uniswap V3, auto-filled per chain) ----
+  // Uniswap V3 (auto-filled per chain, overridable)
   dexRouter: (process.env.DEX_ROUTER || preset?.router || "") as `0x${string}`,
   quoter: (process.env.QUOTER_ADDRESS || preset?.quoter || "") as `0x${string}`,
+  factory: (process.env.UNISWAP_FACTORY || preset?.factory || "") as `0x${string}`,
+  positionManager: (process.env.POSITION_MANAGER ||
+    preset?.positionManager ||
+    "") as `0x${string}`,
   wethAddress: (process.env.WETH_ADDRESS || preset?.weth || "") as `0x${string}`,
   slippageBps: Number(process.env.DEFAULT_SLIPPAGE_BPS ?? "100"),
 
-  // ---- Token Mint / Launchpad ----
   mint: {
     factory: (process.env.TOKEN_FACTORY_ADDRESS ?? "") as `0x${string}`,
     creationFeeEth: process.env.MINT_CREATION_FEE_ETH ?? "",
