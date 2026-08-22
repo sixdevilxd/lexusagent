@@ -1,49 +1,66 @@
 # 🚗 lexusagent
 
-An **AI trading agent on Telegram**. The brain is **Claude Code** (local `claude` CLI) or **AgentRouter** (agentrouter.org API), and on-chain actions run through **ZeroDev smart accounts** (ERC-4337 account abstraction). Built to run on **Termux / Debian**.
+An **AI trading agent on Telegram**. The brain is **Claude Opus 5** (via AgentRouter or your local Claude Code CLI), and on-chain actions run through **ZeroDev smart accounts** (ERC-4337 account abstraction). Built to run on **Termux / Debian**.
 
 ```
 User → Telegram → lexusagent (grammY bot)
-                     ├── 🤖 AI chat      → Claude Code CLI  OR  AgentRouter API
+                     ├── 🤖 AI chat      → Claude Opus 5 (AgentRouter / Claude Code)
                      ├── 💰 Wallet       → ZeroDev smart account
                      ├── 🟢 Buy / 🔴 Sell → DEX swap via UserOperation
+                     ├── 🪙 Mint          → read target web → preview → confirm → sign
                      ├── 📊 Balance      → native + ERC-20
                      └── 📜 Transactions → local history + explorer links
 ```
 
 ## ✨ Features
 - **AI chat** — any plain message is forwarded to the AI and the reply comes back in Telegram.
-- **Two AI providers** — switch with one env var (`AI_PROVIDER`):
-  - `claude` — your local Claude Code CLI (`claude -p`), free.
-  - `agentrouter` — AgentRouter OpenAI-compatible API (base URL fixed to `https://agentrouter.org/v1`).
+- **Three AI modes** — switch with one env var (`AI_PROVIDER`).
 - **Smart wallet** — auto-created per Telegram user, backed by a ZeroDev kernel account.
 - **Buy / Sell** — Uniswap V3 style swaps executed as UserOperations (gas can be sponsored via a ZeroDev paymaster).
+- **AI mint flow** — `/mint <url>`: reads a launchpad page, extracts the form, builds a **Transaction Preview**, waits for **user confirm**, then signs & executes.
 - **Balance** — native coin + any ERC-20.
 - **Transaction history** — recent trades with explorer links.
 - **Encrypted key storage** — private keys are encrypted at rest with AES-256-GCM.
 - **Allowlist** — restrict the bot to specific Telegram user IDs.
 
-## 🧠 AI provider (Claude Code or AgentRouter)
-Pick the brain in `.env`:
+## 🧠 AI provider
+
+AgentRouter exposes **two protocols** — do not mix their base URLs:
+
+| Protocol | Base URL | Models |
+|---|---|---|
+| Anthropic | `https://agentrouter.org` (no `/v1`) | `claude-opus-5` |
+| OpenAI Compatible | `https://agentrouter.org/v1` | `gpt-5.5`, `glm-5.2` |
+
+Pick a mode in `.env`:
 
 ```env
-# Use the local Claude Code CLI (default)
-AI_PROVIDER=claude
+# 1) AgentRouter via Anthropic protocol — Claude Opus 5 (recommended)
+AI_PROVIDER=agentrouter-claude
+AGENTROUTER_API_KEY=your_key
+AGENTROUTER_CLAUDE_MODEL=claude-opus-5
 
-# --- or ---
-
-# Use AgentRouter API
+# 2) AgentRouter via OpenAI-compatible protocol
 AI_PROVIDER=agentrouter
-AGENTROUTER_API_KEY=your_key_from_agentrouter.org/console/token
-AGENTROUTER_MODEL=gpt-5
+AGENTROUTER_API_KEY=your_key
+AGENTROUTER_MODEL=gpt-5.5
+
+# 3) Local Claude Code CLI
+AI_PROVIDER=claude
 ```
 
-> The AgentRouter base URL is **hardcoded to `https://agentrouter.org/v1`** in `src/config.ts` and cannot be pointed anywhere else, by design.
+Mode 3 can also run on your AgentRouter key — just export these before starting:
+```bash
+export ANTHROPIC_AUTH_TOKEN="your_agentrouter_key"
+export ANTHROPIC_BASE_URL="https://agentrouter.org"
+export ANTHROPIC_MODEL="claude-opus-5"
+```
+
+> Base URLs are hardcoded in `src/config.ts` and cannot be pointed anywhere else, by design.
 
 ## 🧰 Prerequisites
 - Node.js 20+
-- For `claude` provider: `claude` (Claude Code) working in your shell — `claude -p "hello"`
-- For `agentrouter` provider: an API key from https://agentrouter.org/console/token
+- An AgentRouter API key (https://agentrouter.org/console/token) **or** a working `claude` CLI
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 - A [ZeroDev](https://dashboard.zerodev.app) project (Project ID + bundler/paymaster RPCs)
 
@@ -55,22 +72,22 @@ bash scripts/setup-termux.sh
 # edit .env with your tokens
 npm start
 ```
+Full mobile guide: **[TERMUX.md](TERMUX.md)**
 
 ## ⚙️ Configuration (`.env`)
-Copy `.env.example` → `.env` and fill in:
-
 | Variable | What it is |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Token from BotFather |
-| `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs allowed to use the bot |
-| `AI_PROVIDER` | `claude` or `agentrouter` |
-| `CLAUDE_CMD` / `CLAUDE_ARGS` | How to call Claude Code (default `claude -p`) |
-| `AGENTROUTER_API_KEY` / `AGENTROUTER_MODEL` | AgentRouter key + model (base URL is fixed in code) |
+| `ALLOWED_USER_IDS` | Telegram user IDs allowed to use the bot |
+| `AI_PROVIDER` | `claude` \| `agentrouter` \| `agentrouter-claude` |
+| `AGENTROUTER_API_KEY` | Key from agentrouter.org |
+| `AGENTROUTER_CLAUDE_MODEL` | Anthropic model, default `claude-opus-5` |
+| `AGENTROUTER_MODEL` | OpenAI-compatible model, default `gpt-5.5` |
 | `CHAIN` / `RPC_URL` | Chain + RPC (default **base-sepolia** testnet) |
-| `ZERODEV_PROJECT_ID` / `ZERODEV_BUNDLER_RPC` / `ZERODEV_PAYMASTER_RPC` | From the ZeroDev dashboard |
+| `ZERODEV_*` | From the ZeroDev dashboard |
 | `WALLET_ENCRYPTION_KEY` | Long random string used to encrypt private keys |
 | `DEX_ROUTER` / `WETH_ADDRESS` | Uniswap V3 router + WETH for your chain |
-| `DEFAULT_SLIPPAGE_BPS` | Default slippage (100 = 1%) |
+| `TOKEN_FACTORY_ADDRESS` | Launchpad/factory contract used by `/mint` |
 
 ## 💬 Commands
 | Command | Action |
@@ -80,6 +97,7 @@ Copy `.env.example` → `.env` and fill in:
 | `/balance [token]` | Native + optional ERC-20 balance |
 | `/buy <token> <amount>` | Buy a token |
 | `/sell <token> <amount>` | Sell a token |
+| `/mint [url]` | AI-assisted token mint with confirm gate |
 | `/tx` | Recent transactions |
 | _any text_ | Ask the AI |
 
@@ -88,6 +106,7 @@ Copy `.env.example` → `.env` and fill in:
 - Private keys are encrypted with `WALLET_ENCRYPTION_KEY`. If you lose that key, wallets are unrecoverable; if it leaks, funds are at risk.
 - **Defaults to `base-sepolia` testnet.** Test thoroughly before touching mainnet or real funds.
 - `amountOutMinimum` is set to `0` in the scaffold (no slippage protection) — **wire up a Uniswap Quoter before mainnet** or you can be sandwiched.
+- The `/mint` ABI in `src/mint/launchpad.ts` is a generic placeholder — **match it to your launchpad** before using.
 - Always set `ALLOWED_USER_IDS` so strangers can't drain your bot.
 - This is a **starter scaffold**, not audited financial software. Use at your own risk.
 

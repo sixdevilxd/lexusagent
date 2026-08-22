@@ -70,8 +70,8 @@ export const config = {
     baseUrl: AGENTROUTER_OPENAI_BASE_URL,
     anthropicBaseUrl: AGENTROUTER_ANTHROPIC_BASE_URL,
     model: process.env.AGENTROUTER_MODEL ?? "gpt-5.5",
-    anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-4-6",
-    maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "4096"),
+    anthropicModel: process.env.AGENTROUTER_CLAUDE_MODEL ?? "claude-opus-5",
+    maxTokens: Number(process.env.AGENTROUTER_MAX_TOKENS ?? "8192"),
   },
 
   // ---- Chain / RPC ----
