@@ -1,14 +1,6 @@
 import "dotenv/config";
+import * as viemChains from "viem/chains";
 import type { Chain } from "viem";
-import {
-  base,
-  baseSepolia,
-  mainnet,
-  sepolia,
-  arbitrum,
-  optimism,
-  polygon,
-} from "viem/chains";
 
 function req(name: string): string {
   const v = process.env[name];
@@ -16,37 +8,88 @@ function req(name: string): string {
   return v;
 }
 
-const CHAINS: Record<string, Chain> = {
-  mainnet,
-  sepolia,
-  base,
-  "base-sepolia": baseSepolia,
-  arbitrum,
-  optimism,
-  polygon,
+// Friendly .env aliases -> viem chain export names.
+// Any viem chain export name also works directly (e.g. CHAIN=berachain),
+// as does a raw chain id (e.g. CHAIN=8453).
+const CHAIN_ALIASES: Record<string, string> = {
+  eth: "mainnet",
+  ethereum: "mainnet",
+  "base-sepolia": "baseSepolia",
+  "arbitrum-one": "arbitrum",
+  "arbitrum-nova": "arbitrumNova",
+  "arbitrum-sepolia": "arbitrumSepolia",
+  "optimism-sepolia": "optimismSepolia",
+  "op-sepolia": "optimismSepolia",
+  "polygon-amoy": "polygonAmoy",
+  bnb: "bsc",
+  binance: "bsc",
+  opbnb: "opBNB",
+  "avalanche-fuji": "avalancheFuji",
+  fuji: "avalancheFuji",
+  "linea-sepolia": "lineaSepolia",
+  "scroll-sepolia": "scrollSepolia",
+  "mantle-sepolia": "mantleSepoliaTestnet",
+  "mode-testnet": "modeTestnet",
+  "blast-sepolia": "blastSepolia",
+  "celo-alfajores": "celoAlfajores",
+  "gnosis-chiado": "gnosisChiado",
+  "unichain-sepolia": "unichainSepolia",
+  "ink-sepolia": "inkSepolia",
+  "monad-testnet": "monadTestnet",
 };
 
-const EXPLORERS: Record<string, string> = {
-  mainnet: "https://etherscan.io/tx/",
-  sepolia: "https://sepolia.etherscan.io/tx/",
-  base: "https://basescan.org/tx/",
-  "base-sepolia": "https://sepolia.basescan.org/tx/",
-  arbitrum: "https://arbiscan.io/tx/",
-  optimism: "https://optimistic.etherscan.io/tx/",
-  polygon: "https://polygonscan.com/tx/",
-};
+function resolveChain(key: string): Chain | undefined {
+  const all = viemChains as unknown as Record<string, Chain>;
+  const isChain = (c: any): c is Chain =>
+    c && typeof c === "object" && typeof c.id === "number";
 
-const chainKey = process.env.CHAIN ?? "base-sepolia";
-const chain = CHAINS[chainKey];
-if (!chain) throw new Error(`Unsupported CHAIN: ${chainKey}`);
+  // Numeric chain id, e.g. CHAIN=8453
+  if (/^\d+$/.test(key)) {
+    const id = Number(key);
+    return Object.values(all).find((c) => isChain(c) && c.id === id);
+  }
+
+  const name = CHAIN_ALIASES[key.toLowerCase()] ?? key;
+  const direct = all[name];
+  if (isChain(direct)) return direct;
+
+  // Last resort: case-insensitive match on the export name
+  const found = Object.entries(all).find(
+    ([k, v]) => k.toLowerCase() === name.toLowerCase() && isChain(v),
+  );
+  return found?.[1];
+}
+
+const chainKey = (process.env.CHAIN ?? "base-sepolia").trim();
+const chain = resolveChain(chainKey);
+if (!chain) {
+  throw new Error(
+    `Unsupported CHAIN: "${chainKey}".\n` +
+      `Use a viem chain name (base, arbitrum, polygon, bsc, avalanche, linea, scroll, ...),\n` +
+      `an alias (base-sepolia, arbitrum-sepolia, ...), or a numeric chain id (e.g. 8453).`,
+  );
+}
+
+// Derived from the chain definition — works for every supported network.
+const explorerBase = chain.blockExplorers?.default?.url ?? "";
+const explorerTx = explorerBase ? `${explorerBase.replace(/\/$/, "")}/tx/` : "";
+
+// RPC_URL is optional — fall back to the chain's public RPC.
+const rpcUrl = process.env.RPC_URL || chain.rpcUrls.default.http[0];
+
+// ZeroDev API v3 RPC is built automatically from the project id + chain id,
+// which prevents "chain mismatch" mistakes. An explicit ZERODEV_RPC wins.
+const zerodevProjectId = process.env.ZERODEV_PROJECT_ID ?? "";
+const zerodevRpc =
+  process.env.ZERODEV_RPC ||
+  (zerodevProjectId
+    ? `https://rpc.zerodev.app/api/v3/${zerodevProjectId}/chain/${chain.id}`
+    : "");
 
 // AgentRouter base URL — exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
 // The AI always runs on the AgentRouter API key.
-//   agentrouter-claude -> Anthropic protocol      (claude-opus-5)   [default]
-//   agentrouter        -> OpenAI-compatible       (gpt-5.5 / glm-5.2)
-// Any other value (e.g. the removed "claude" CLI mode) is migrated automatically.
 const rawProvider = (process.env.AI_PROVIDER ?? "agentrouter-claude").trim();
 const aiProvider: "agentrouter-claude" | "agentrouter" =
   rawProvider === "agentrouter" ? "agentrouter" : "agentrouter-claude";
@@ -56,7 +99,6 @@ if (rawProvider !== aiProvider) {
   );
 }
 
-// Full-access GitHub OAuth scopes.
 const GITHUB_FULL_SCOPES = [
   "repo",
   "workflow",
@@ -104,13 +146,16 @@ export const config = {
   // ---- Chain / RPC ----
   chainKey,
   chain,
-  explorerTx: EXPLORERS[chainKey] ?? "",
-  rpcUrl: req("RPC_URL"),
+  chainId: chain.id,
+  chainName: chain.name,
+  isTestnet: Boolean((chain as any).testnet),
+  explorerTx,
+  rpcUrl,
 
   // ---- ZeroDev (API v3: one RPC serves bundler + paymaster) ----
   zerodev: {
-    projectId: process.env.ZERODEV_PROJECT_ID ?? "",
-    rpc: process.env.ZERODEV_RPC ?? "",
+    projectId: zerodevProjectId,
+    rpc: zerodevRpc,
     bundlerRpc: process.env.ZERODEV_BUNDLER_RPC ?? "",
     paymasterRpc: process.env.ZERODEV_PAYMASTER_RPC ?? "",
   },
