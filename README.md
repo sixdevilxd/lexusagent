@@ -1,2 +1,76 @@
-# lexusagent
-AI trading agent on Telegram — Claude Code as the brain + ZeroDev smart accounts (wallet, buy/sell, balance, transactions). Runs on Termux/Debian.
+# 🚗 lexusagent
+
+An **AI trading agent on Telegram**. The brain is **Claude Code** (your local `claude` CLI), and on-chain actions run through **ZeroDev smart accounts** (ERC-4337 account abstraction). Built to run on **Termux / Debian**.
+
+```
+User → Telegram → lexusagent (grammY bot)
+                     ├── 🤖 AI chat      → Claude Code CLI (claude -p)
+                     ├── 💰 Wallet       → ZeroDev smart account
+                     ├── 🟢 Buy / 🔴 Sell → DEX swap via UserOperation
+                     ├── 📊 Balance      → native + ERC-20
+                     └── 📜 Transactions → local history + explorer links
+```
+
+## ✨ Features
+- **AI chat** — any plain message is forwarded to Claude Code and the reply comes back in Telegram.
+- **Smart wallet** — auto-created per Telegram user, backed by a ZeroDev kernel account.
+- **Buy / Sell** — Uniswap V3 style swaps executed as UserOperations (gas can be sponsored via a ZeroDev paymaster).
+- **Balance** — native coin + any ERC-20.
+- **Transaction history** — recent trades with explorer links.
+- **Encrypted key storage** — private keys are encrypted at rest with AES-256-GCM.
+- **Allowlist** — restrict the bot to specific Telegram user IDs.
+
+## 🧰 Prerequisites
+- Node.js 20+
+- `claude` (Claude Code) working in your shell: `claude -p "hello"`
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- A [ZeroDev](https://dashboard.zerodev.app) project (Project ID + bundler/paymaster RPCs)
+
+## 🚀 Quick start (Termux / Debian)
+```bash
+git clone https://github.com/sixdevilxd/lexusagent.git
+cd lexusagent
+bash scripts/setup-termux.sh
+# edit .env with your tokens
+npm start
+```
+
+## ⚙️ Configuration (`.env`)
+Copy `.env.example` → `.env` and fill in:
+
+| Variable | What it is |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token from BotFather |
+| `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs allowed to use the bot |
+| `CLAUDE_CMD` / `CLAUDE_ARGS` | How to call Claude Code (default `claude -p`) |
+| `CHAIN` / `RPC_URL` | Chain + RPC (default **base-sepolia** testnet) |
+| `ZERODEV_PROJECT_ID` / `ZERODEV_BUNDLER_RPC` / `ZERODEV_PAYMASTER_RPC` | From the ZeroDev dashboard |
+| `WALLET_ENCRYPTION_KEY` | Long random string used to encrypt private keys |
+| `DEX_ROUTER` / `WETH_ADDRESS` | Uniswap V3 router + WETH for your chain |
+| `DEFAULT_SLIPPAGE_BPS` | Default slippage (100 = 1%) |
+
+## 💬 Commands
+| Command | Action |
+|---|---|
+| `/start` | Menu |
+| `/wallet` | Show / create your smart wallet |
+| `/balance [token]` | Native + optional ERC-20 balance |
+| `/buy <token> <amount>` | Buy a token |
+| `/sell <token> <amount>` | Sell a token |
+| `/tx` | Recent transactions |
+| _any text_ | Ask the AI (Claude Code) |
+
+## 🔐 Security notes — READ THIS
+- **Never commit `.env` or `data/`** — they hold your bot token and encrypted keys. (Already in `.gitignore`.)
+- Private keys are encrypted with `WALLET_ENCRYPTION_KEY`. If you lose that key, wallets are unrecoverable; if it leaks, funds are at risk.
+- **Defaults to `base-sepolia` testnet.** Test thoroughly before touching mainnet or real funds.
+- `amountOutMinimum` is set to `0` in the scaffold (no slippage protection) — **wire up a Uniswap Quoter before mainnet** or you can be sandwiched.
+- Always set `ALLOWED_USER_IDS` so strangers can't drain your bot.
+- This is a **starter scaffold**, not audited financial software. Use at your own risk.
+
+## 🛠️ Notes
+- Runs directly with `tsx` (no build step needed). `npm run typecheck` for type checks.
+- The ZeroDev SDK changes fast — if an import breaks, check https://docs.zerodev.app and adjust `src/wallet/zerodev.ts`.
+
+## 📄 License
+MIT — do whatever, no warranty.
