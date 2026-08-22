@@ -43,6 +43,19 @@ if (!chain) throw new Error(`Unsupported CHAIN: ${chainKey}`);
 // AgentRouter base URL — exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
+// The AI always runs on the AgentRouter API key.
+//   agentrouter-claude -> Anthropic protocol      (claude-opus-5)   [default]
+//   agentrouter        -> OpenAI-compatible       (gpt-5.5 / glm-5.2)
+// Any other value (e.g. the removed "claude" CLI mode) is migrated automatically.
+const rawProvider = (process.env.AI_PROVIDER ?? "agentrouter-claude").trim();
+const aiProvider: "agentrouter-claude" | "agentrouter" =
+  rawProvider === "agentrouter" ? "agentrouter" : "agentrouter-claude";
+if (rawProvider !== aiProvider) {
+  console.warn(
+    `[config] AI_PROVIDER="${rawProvider}" is no longer supported — using "${aiProvider}" (AgentRouter API).`,
+  );
+}
+
 // Full-access GitHub OAuth scopes.
 const GITHUB_FULL_SCOPES = [
   "repo",
@@ -72,17 +85,8 @@ export const config = {
     .filter(Boolean)
     .map(Number),
 
-  // ---- AI provider selection ----
-  // agentrouter-claude | agentrouter | claude
-  aiProvider: (process.env.AI_PROVIDER ?? "agentrouter-claude") as
-    | "claude"
-    | "agentrouter"
-    | "agentrouter-claude",
-
-  claudeCmd: process.env.CLAUDE_CMD ?? "claude",
-  claudeArgs: (process.env.CLAUDE_ARGS ?? "-p").split(" ").filter(Boolean),
-
-  // AgentRouter. Base URL is fixed — endpoint paths are added per request.
+  // ---- AI (AgentRouter only) ----
+  aiProvider,
   agentRouter: {
     apiKey: process.env.AGENTROUTER_API_KEY ?? "",
     baseUrl: AGENTROUTER_BASE_URL,
@@ -94,7 +98,7 @@ export const config = {
   // ---- GitHub OAuth (Device Flow) ----
   github: {
     clientId: process.env.GITHUB_CLIENT_ID ?? "",
-    scopes: process.env.GITHUB_SCOPES ?? GITHUB_FULL_SCOPES,
+    scopes: process.env.GITHUB_SCOPES || GITHUB_FULL_SCOPES,
   },
 
   // ---- Chain / RPC ----

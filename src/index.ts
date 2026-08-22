@@ -4,7 +4,7 @@ import { registerHandlers } from "./bot/commands";
 
 const bot = new Bot(config.telegramToken);
 
-// ---- incoming update logging (helps debugging "bot doesn't reply") ----
+// ---- incoming update logging ----
 bot.use(async (ctx, next) => {
   const uid = ctx.from?.id;
   const uname = ctx.from?.username ?? "-";
@@ -35,11 +35,11 @@ bot.catch((err) => {
 });
 
 // ---- startup sanity checks ----
-const usesAgentRouter =
-  config.aiProvider === "agentrouter" || config.aiProvider === "agentrouter-claude";
-
-if (usesAgentRouter && !config.agentRouter.apiKey) {
-  console.warn("⚠️  AI_PROVIDER is AgentRouter but AGENTROUTER_API_KEY is empty — AI replies will fail.");
+if (!config.agentRouter.apiKey) {
+  console.error(
+    "❌ AGENTROUTER_API_KEY is empty — the AI cannot reply.\n" +
+      "   Get a key at https://agentrouter.org/console/token and put it in .env",
+  );
 }
 if (!config.allowedUserIds.length) {
   console.warn("⚠️  ALLOWED_USER_IDS is empty — anyone who finds the bot can use it.");
@@ -47,10 +47,18 @@ if (!config.allowedUserIds.length) {
 if (!config.zerodev.rpc) {
   console.warn("⚠️  ZERODEV_RPC is empty — /wallet, /balance, /buy, /sell, /mint will fail.");
 }
+if (!config.github.clientId) {
+  console.warn("⚠️  GITHUB_CLIENT_ID is empty — /github will not work (see GITHUB.md).");
+}
+
+const activeModel =
+  config.aiProvider === "agentrouter"
+    ? config.agentRouter.model
+    : config.agentRouter.anthropicModel;
 
 console.log("🚗 lexusagent starting...");
-console.log(`   AI provider : ${config.aiProvider}`);
-console.log(`   Chain       : ${config.chainKey}`);
+console.log(`   AI     : ${activeModel} via AgentRouter (${config.aiProvider})`);
+console.log(`   Chain  : ${config.chainKey}`);
 
 void bot.start({
   drop_pending_updates: true,
