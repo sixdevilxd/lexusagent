@@ -2,7 +2,7 @@ import type { Bot, Context } from "grammy";
 import type { Address } from "viem";
 import { config } from "../config";
 import { mainMenu } from "./keyboards";
-import { askClaude } from "../ai/claude";
+import { ask } from "../ai";
 import { createWallet, getEoaAddress, hasWallet } from "../wallet/store";
 import { getKernelClient } from "../wallet/zerodev";
 import { getBalances, buyToken, sellToken } from "../wallet/trade";
@@ -52,7 +52,7 @@ async function showTxs(ctx: Context): Promise<void> {
 export function registerHandlers(bot: Bot): void {
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "🚗 *lexusagent*\nAI trading agent powered by Claude Code + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/tx — recent transactions",
+      "🚗 *lexusagent*\nAI trading agent powered by Claude Code / AgentRouter + ZeroDev.\n\nPick an action below, or just type a message to chat with the AI.\n\nCommands:\n/wallet — show/create wallet\n/balance [token] — check balance\n/buy <token> <amount> — buy\n/sell <token> <amount> — sell\n/tx — recent transactions",
       { parse_mode: "Markdown", reply_markup: mainMenu },
     );
   });
@@ -122,15 +122,15 @@ export function registerHandlers(bot: Bot): void {
   });
   bot.callbackQuery("ai_help", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.reply("🤖 Just type any message and I'll pass it to Claude Code.");
+    await ctx.reply("🤖 Just type any message and I'll pass it to the AI.");
   });
 
-  // Any non-command text => Claude Code brain
+  // Any non-command text => AI brain (Claude Code or AgentRouter)
   bot.on("message:text", async (ctx) => {
     if (ctx.message.text.startsWith("/")) return;
     await ctx.replyWithChatAction("typing");
     try {
-      const answer = await askClaude(ctx.message.text);
+      const answer = await ask(ctx.message.text);
       await ctx.reply(answer || "(no output)");
     } catch (e: any) {
       await ctx.reply(`❌ AI error: ${e.message}`);
