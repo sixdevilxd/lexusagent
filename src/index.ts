@@ -12,12 +12,10 @@ try {
 import { Bot, GrammyError, HttpError } from "grammy";
 import { config } from "./config";
 import { registerHandlers } from "./bot/commands";
+import { registerTarget } from "./recon/flow";
 
 const bot = new Bot(config.telegramToken, {
-  client: {
-    // Long-poll friendly; default is 500s for getUpdates but short for others.
-    timeoutSeconds: 60,
-  },
+  client: { timeoutSeconds: 60 },
 });
 
 // ---- retry transient network failures against the Telegram API ----
@@ -74,6 +72,7 @@ bot.use(async (ctx, next) => {
 });
 
 registerHandlers(bot);
+registerTarget(bot);
 
 bot.catch((err) => {
   const e = err.error;
@@ -101,8 +100,7 @@ if (config.aiProvider === "agentrouter") {
 }
 if (config.aiProvider === "agentrouter" && isClaudeModel(config.agentRouter.model)) {
   console.error(
-    `❌ MISMATCH: AGENTROUTER_MODEL="${config.agentRouter.model}" is a Claude model on the OpenAI endpoint.\n` +
-      "   Fix: AI_PROVIDER=agentrouter-claude",
+    `❌ MISMATCH: AGENTROUTER_MODEL="${config.agentRouter.model}" is a Claude model on the OpenAI endpoint.`,
   );
 }
 if (!config.allowedUserIds.length) {
@@ -113,6 +111,9 @@ if (!config.zerodev.rpc) {
 }
 if (!config.dexRouter || !config.positionManager) {
   console.warn(`⚠️  No Uniswap V3 preset for chain ${config.chainId} - /buy /sell /lp disabled.`);
+}
+if (!process.env.CHROMIUM_PATH) {
+  console.warn("⚠️  CHROMIUM_PATH not set - /target needs it. Run: bash scripts/setup-browser.sh");
 }
 if (
   process.env.RPC_URL &&
@@ -140,5 +141,25 @@ console.log(`   AA RPC: ${config.zerodev.rpc ? mask(config.zerodev.rpc) : "- not
 
 void bot.start({
   drop_pending_updates: true,
-  onStart: (info) => console.log(`✅ Connected as @${info.username}`),
+  onStart: async (info) => {
+    console.log(`✅ Connected as @${info.username}`);
+    try {
+      await bot.api.setMyCommands([
+        { command: "target", description: "Recon a mint site and mint (GTD/FCFS/WL/public)" },
+        { command: "degen", description: "Mint an NFT contract directly" },
+        { command: "lp", description: "Provide Uniswap V3 liquidity" },
+        { command: "buy", description: "Buy a token with native" },
+        { command: "sell", description: "Sell a token to WETH" },
+        { command: "mint", description: "Create a new token" },
+        { command: "wallet", description: "Show smart wallet" },
+        { command: "balance", description: "Check balance" },
+        { command: "tx", description: "Recent transactions" },
+        { command: "github", description: "Connect GitHub" },
+        { command: "status", description: "Show configuration" },
+        { command: "ping", description: "Check the bot is alive" },
+      ]);
+    } catch {
+      /* non-fatal */
+    }
+  },
 });
