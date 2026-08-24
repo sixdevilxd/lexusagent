@@ -5,14 +5,15 @@ import {
   formatUnits,
   formatEther,
   type Address,
+  type Chain,
 } from "viem";
-import { publicClient, getKernelClient } from "./zerodev";
+import { getKernelClient } from "./zerodev";
 import { config } from "../config";
+import { chainCtx, detectChainForToken, type ChainCtx } from "../chains";
 import { recordTx } from "./history";
 
 const FEE_TIERS = [500, 3000, 10000] as const;
 
-// Uniswap V3 SwapRouter02
 const swapRouterAbi = [
   {
     name: "exactInputSingle",
@@ -37,7 +38,6 @@ const swapRouterAbi = [
   },
 ] as const;
 
-// Uniswap V3 QuoterV2 (non-view: must be simulated)
 const quoterAbi = [
   {
     name: "quoteExactInputSingle",
@@ -67,47 +67,64 @@ const quoterAbi = [
 
 const wethAbi = [
   { name: "deposit", type: "function", stateMutability: "payable", inputs: [], outputs: [] },
-  {
-    name: "withdraw",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "wad", type: "uint256" }],
-    outputs: [],
-  },
 ] as const;
 
-function requireDex(): void {
-  if (!config.dexRouter || !config.wethAddress || !config.quoter) {
+/** Pick the chain a token actually trades on, unless one was forced. */
+export async function resolveTradeChain(
+  token: Address,
+  explicit?: Chain,
+): Promise<{ chain: Chain; detected: boolean; note?: string }> {
+  if (explicit) return { chain: explicit, detected: false };
+
+  const { hit, nonEvmOnly } = await detectChainForToken(token);
+  if (hit) {
+    return {
+      chain: hit.chain,
+      detected: true,
+      note: `${hit.symbol} on ${hit.chain.name} (liq $${Math.round(hit.liquidityUsd ?? 0).toLocaleString("en-US")})`,
+    };
+  }
+  if (nonEvmOnly?.length) {
     throw new Error(
-      `DEX not configured for ${config.chainName} (chain ${config.chainId}). ` +
-        "Set DEX_ROUTER, QUOTER_ADDRESS and WETH_ADDRESS in .env",
+      `This token only trades on ${nonEvmOnly.join(", ")}, which is not EVM. ZeroDev cannot sign there.`,
     );
   }
+  return { chain: config.chain, detected: false, note: "no market data - using default chain" };
 }
 
-/** Quote across all fee tiers and return the deepest pool. */
+function requireDex(ctx: ChainCtx): NonNullable<ChainCtx["preset"]> {
+  if (!ctx.preset) {
+    throw new Error(
+      `No Uniswap V3 deployment configured for ${ctx.name} (chain ${ctx.chainId}).`,
+    );
+  }
+  return ctx.preset;
+}
+
 async function bestQuote(
+  ctx: ChainCtx,
   tokenIn: Address,
   tokenOut: Address,
   amountIn: bigint,
 ): Promise<{ fee: number; amountOut: bigint }> {
+  const preset = requireDex(ctx);
   let best = { fee: 0, amountOut: 0n };
   for (const fee of FEE_TIERS) {
     try {
-      const { result } = await publicClient.simulateContract({
-        address: config.quoter,
+      const { result } = await ctx.publicClient.simulateContract({
+        address: preset.quoter,
         abi: quoterAbi,
         functionName: "quoteExactInputSingle",
         args: [{ tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96: 0n }],
-      });
+      } as any);
       const out = (result as readonly bigint[])[0];
       if (out > best.amountOut) best = { fee, amountOut: out };
     } catch {
-      // no pool at this fee tier
+      /* no pool at this tier */
     }
   }
   if (best.amountOut === 0n) {
-    throw new Error("No Uniswap V3 pool with liquidity found for this pair");
+    throw new Error(`No Uniswap V3 pool with liquidity on ${ctx.name} for this pair.`);
   }
   return best;
 }
@@ -117,18 +134,24 @@ function applySlippage(amountOut: bigint): bigint {
   return (amountOut * (10000n - bps)) / 10000n;
 }
 
-export async function getBalances(smartAddress: Address, token?: Address) {
-  const native = await publicClient.getBalance({ address: smartAddress });
+export async function getBalances(
+  smartAddress: Address,
+  token?: Address,
+  chain: Chain = config.chain,
+) {
+  const ctx = chainCtx(chain);
+  const native = await ctx.publicClient.getBalance({ address: smartAddress });
   const result: {
+    chain: string;
     native: string;
     token?: { address: Address; symbol: string; balance: string };
-  } = { native: formatEther(native) };
+  } = { chain: ctx.name, native: formatEther(native) };
 
   if (token) {
     const [bal, dec, sym] = await Promise.all([
-      publicClient.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [smartAddress] }),
-      publicClient.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
-      publicClient.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
+      ctx.publicClient.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [smartAddress] }),
+      ctx.publicClient.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
+      ctx.publicClient.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
     ]);
     result.token = {
       address: token,
@@ -144,49 +167,52 @@ export type SwapResult = {
   fee: number;
   expectedOut: bigint;
   minOut: bigint;
+  chainName: string;
+  chainId: number;
+  explorerTx: string;
+  detected: boolean;
+  note?: string;
 };
 
-/**
- * BUY: native -> token.
- * Wraps the native amount to WETH and swaps it in one UserOperation,
- * so no pre-existing WETH balance is needed.
- */
+/** BUY: native -> token. Chain is auto-detected from the token unless forced. */
 export async function buyToken(
   userId: number,
   tokenOut: Address,
   amountInEth: string,
+  forceChain?: Chain,
 ): Promise<SwapResult> {
-  requireDex();
-  const { kernelClient, smartAddress } = await getKernelClient(userId);
-  const amountIn = parseUnits(amountInEth, 18);
+  const { chain, detected, note } = await resolveTradeChain(tokenOut, forceChain);
+  const { kernelClient, smartAddress, ctx } = await getKernelClient(userId, chain);
+  const preset = requireDex(ctx);
 
-  const { fee, amountOut } = await bestQuote(config.wethAddress, tokenOut, amountIn);
+  const amountIn = parseUnits(amountInEth, 18);
+  const { fee, amountOut } = await bestQuote(ctx, preset.weth, tokenOut, amountIn);
   const minOut = applySlippage(amountOut);
 
   const calls = [
     {
-      to: config.wethAddress,
+      to: preset.weth,
       value: amountIn,
       data: encodeFunctionData({ abi: wethAbi, functionName: "deposit" }),
     },
     {
-      to: config.wethAddress,
+      to: preset.weth,
       value: 0n,
       data: encodeFunctionData({
         abi: erc20Abi,
         functionName: "approve",
-        args: [config.dexRouter, amountIn],
+        args: [preset.router, amountIn],
       }),
     },
     {
-      to: config.dexRouter,
+      to: preset.router,
       value: 0n,
       data: encodeFunctionData({
         abi: swapRouterAbi,
         functionName: "exactInputSingle",
         args: [
           {
-            tokenIn: config.wethAddress,
+            tokenIn: preset.weth,
             tokenOut,
             fee,
             recipient: smartAddress,
@@ -204,26 +230,40 @@ export async function buyToken(
   });
   const receipt = await kernelClient.waitForUserOperationReceipt({ hash });
   const txHash = receipt.receipt.transactionHash as `0x${string}`;
-  recordTx(userId, { type: "buy", token: tokenOut, amount: amountInEth, txHash });
-  return { txHash, fee, expectedOut: amountOut, minOut };
+  recordTx(userId, { type: "buy", token: tokenOut, amount: `${amountInEth} on ${ctx.name}`, txHash });
+
+  return {
+    txHash,
+    fee,
+    expectedOut: amountOut,
+    minOut,
+    chainName: ctx.name,
+    chainId: ctx.chainId,
+    explorerTx: ctx.explorerTx,
+    detected,
+    note,
+  };
 }
 
-/** SELL: token -> WETH. */
+/** SELL: token -> WETH. Chain auto-detected from the token unless forced. */
 export async function sellToken(
   userId: number,
   tokenIn: Address,
   amountInToken: string,
+  forceChain?: Chain,
 ): Promise<SwapResult> {
-  requireDex();
-  const { kernelClient, smartAddress } = await getKernelClient(userId);
-  const dec = (await publicClient.readContract({
+  const { chain, detected, note } = await resolveTradeChain(tokenIn, forceChain);
+  const { kernelClient, smartAddress, ctx } = await getKernelClient(userId, chain);
+  const preset = requireDex(ctx);
+
+  const dec = (await ctx.publicClient.readContract({
     address: tokenIn,
     abi: erc20Abi,
     functionName: "decimals",
   })) as number;
   const amountIn = parseUnits(amountInToken, dec);
 
-  const { fee, amountOut } = await bestQuote(tokenIn, config.wethAddress, amountIn);
+  const { fee, amountOut } = await bestQuote(ctx, tokenIn, preset.weth, amountIn);
   const minOut = applySlippage(amountOut);
 
   const calls = [
@@ -233,11 +273,11 @@ export async function sellToken(
       data: encodeFunctionData({
         abi: erc20Abi,
         functionName: "approve",
-        args: [config.dexRouter, amountIn],
+        args: [preset.router, amountIn],
       }),
     },
     {
-      to: config.dexRouter,
+      to: preset.router,
       value: 0n,
       data: encodeFunctionData({
         abi: swapRouterAbi,
@@ -245,7 +285,7 @@ export async function sellToken(
         args: [
           {
             tokenIn,
-            tokenOut: config.wethAddress,
+            tokenOut: preset.weth,
             fee,
             recipient: smartAddress,
             amountIn,
@@ -262,6 +302,17 @@ export async function sellToken(
   });
   const receipt = await kernelClient.waitForUserOperationReceipt({ hash });
   const txHash = receipt.receipt.transactionHash as `0x${string}`;
-  recordTx(userId, { type: "sell", token: tokenIn, amount: amountInToken, txHash });
-  return { txHash, fee, expectedOut: amountOut, minOut };
+  recordTx(userId, { type: "sell", token: tokenIn, amount: `${amountInToken} on ${ctx.name}`, txHash });
+
+  return {
+    txHash,
+    fee,
+    expectedOut: amountOut,
+    minOut,
+    chainName: ctx.name,
+    chainId: ctx.chainId,
+    explorerTx: ctx.explorerTx,
+    detected,
+    note,
+  };
 }
