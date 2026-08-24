@@ -1,6 +1,7 @@
 import type { Bot, Context } from "grammy";
-import type { Address } from "viem";
+import type { Address, Chain } from "viem";
 import { config } from "../config";
+import { resolveChain } from "../chains";
 import { mainMenu } from "./keyboards";
 import { StreamingMessage, keepTyping } from "./stream";
 import { setPending, confirmKeyboard, registerConfirm } from "./confirm";
@@ -16,15 +17,22 @@ import { startDeviceFlow, pollForToken } from "../github/oauth";
 import { saveToken, getToken, getLogin, clearToken } from "../github/store";
 import { getViewer, listRepos } from "../github/client";
 
-const txLink = (hash: string) =>
-  config.explorerTx ? `${config.explorerTx}${hash}` : hash;
+/** Last token in the arg list may be a chain name/id. */
+function popChain(parts: string[]): { parts: string[]; chain?: Chain } {
+  if (parts.length < 2) return { parts };
+  const last = parts[parts.length - 1];
+  if (/^0x/i.test(last)) return { parts };
+  const c = resolveChain(last);
+  if (c) return { parts: parts.slice(0, -1), chain: c };
+  return { parts };
+}
 
 function swapSummary(label: string, r: SwapResult): string {
+  const link = r.explorerTx ? r.explorerTx + r.txHash : r.txHash;
   return (
-    `✅ ${label} sent\n` +
-    `Pool fee: ${r.fee / 10000}%\n` +
-    `Slippage cap: ${config.slippageBps / 100}%\n` +
-    txLink(r.txHash)
+    `✅ ${label} sent on *${r.chainName}*${r.detected ? " (auto-detected)" : ""}\n` +
+    `Pool fee: ${r.fee / 10000}%  •  slippage cap ${config.slippageBps / 100}%\n` +
+    link
   );
 }
 
@@ -34,20 +42,20 @@ async function showWallet(ctx: Context): Promise<void> {
   const eoa = getEoaAddress(uid);
   const { smartAddress } = await getKernelClient(uid);
   await ctx.reply(
-    `💰 *Wallet* — ${config.chainName}\n\nSmart Account:\n\`${smartAddress}\`\n\nSigner (EOA):\n\`${eoa}\``,
+    `💰 *Wallet*\n\nSmart Account (same address on every EVM chain):\n\`${smartAddress}\`\n\nSigner (EOA):\n\`${eoa}\``,
     { parse_mode: "Markdown" },
   );
 }
 
-async function showBalance(ctx: Context, token?: Address): Promise<void> {
+async function showBalance(ctx: Context, token?: Address, chain?: Chain): Promise<void> {
   const uid = ctx.from!.id;
   if (!hasWallet(uid)) {
     await ctx.reply("No wallet yet. Use /wallet.");
     return;
   }
-  const { smartAddress } = await getKernelClient(uid);
-  const bal = await getBalances(smartAddress, token);
-  let msg = `📊 *Balance* — ${config.chainName}\n\n\`${smartAddress}\`\n\nNative: *${bal.native}*`;
+  const { smartAddress } = await getKernelClient(uid, chain ?? config.chain);
+  const bal = await getBalances(smartAddress, token, chain ?? config.chain);
+  let msg = `📊 *Balance* — ${bal.chain}\n\n\`${smartAddress}\`\n\nNative: *${bal.native}*`;
   if (bal.token) msg += `\n${bal.token.symbol}: *${bal.token.balance}*`;
   await ctx.reply(msg, { parse_mode: "Markdown" });
 }
@@ -58,16 +66,13 @@ async function showTxs(ctx: Context): Promise<void> {
     await ctx.reply("📜 No transactions yet.");
     return;
   }
-  const lines = txs.map(
-    (t, i) => `${i + 1}. *${t.type.toUpperCase()}* ${t.amount}\n${txLink(t.txHash)}`,
-  );
+  const lines = txs.map((t, i) => `${i + 1}. *${t.type.toUpperCase()}* ${t.amount}\n\`${t.txHash}\``);
   await ctx.reply(`📜 *Recent*\n\n${lines.join("\n\n")}`, {
     parse_mode: "Markdown",
     link_preview_options: { is_disabled: true },
   });
 }
 
-// ---------- GitHub ----------
 async function githubStatus(ctx: Context): Promise<void> {
   const token = getToken(ctx.from!.id);
   if (!token) {
@@ -78,12 +83,12 @@ async function githubStatus(ctx: Context): Promise<void> {
     const user = await getViewer(token);
     const repos = await listRepos(token, 5);
     const list = repos.map((r: any) => `• ${r.full_name}`).join("\n") || "_none_";
-    await ctx.reply(
-      `✅ *${user.login}* — full access\nPublic repos: ${user.public_repos}\n\n*Recent:*\n${list}`,
-      { parse_mode: "Markdown", link_preview_options: { is_disabled: true } },
-    );
+    await ctx.reply(`✅ *${user.login}* — full access\n\n*Recent:*\n${list}`, {
+      parse_mode: "Markdown",
+      link_preview_options: { is_disabled: true },
+    });
   } catch (e: any) {
-    await ctx.reply(`⚠️ Token invalid: ${e.message}\nSend /github to reconnect.`);
+    await ctx.reply(`⚠️ Token invalid: ${e.message}`);
   }
 }
 
@@ -130,8 +135,9 @@ export function registerHandlers(bot: Bot): void {
       "🩺 *Status*\n\n" +
         `AI: *${model}*  • tools: ${config.aiProvider === "agentrouter-claude" ? "✅" : "❌"}\n` +
         `Key: ${config.agentRouter.apiKey ? "✅" : "❌"}  • GitHub: ${gh ? `✅ ${gh}` : "❌"}\n\n` +
-        `Chain: *${config.chainName}* (${config.chainId})${config.isTestnet ? " testnet" : ""}\n` +
-        `ZeroDev: ${config.zerodev.rpc ? "✅" : "❌"}  • DEX: ${config.dexRouter ? "✅" : "❌"}  • LP: ${config.positionManager ? "✅" : "❌"}\n` +
+        `Default chain: *${config.chainName}* (${config.chainId})\n` +
+        `Auto chain-switch: ✅ (by deepest liquidity)\n` +
+        `ZeroDev: ${config.zerodev.rpc ? "✅" : "❌"}  • browser: ${process.env.CHROMIUM_PATH ? "✅" : "❌"}\n` +
         `Slippage: ${config.slippageBps / 100}%\n` +
         `Your ID: \`${ctx.from?.id}\``,
       { parse_mode: "Markdown" },
@@ -152,16 +158,15 @@ export function registerHandlers(bot: Bot): void {
   bot.command("start", async (ctx) => {
     await ctx.reply(
       "🚗 *lexusagent*\n\n" +
-        "💬 *Type anything* — coding, live prices, token scans, X/TikTok sentiment, web search. No command needed.\n\n" +
-        "/wallet — smart wallet\n" +
-        "/balance [token]\n" +
-        "/buy <token> <amountNative>\n" +
-        "/sell <token> <amountToken>\n" +
-        "/lp <token> <amountNative> <amountToken> [fee]\n" +
-        "/degen <nftContract> [qty] [priceEach]\n" +
-        "/mint [url] — create a token\n" +
-        "/github — connect GitHub\n" +
-        "/tx • /status • /ping",
+        "💬 *Type anything* — coding, live prices, token scans, sentiment, web search.\n\n" +
+        "/target <url> [qty] — recon a mint site, then mint\n" +
+        "/degen <nft> [qty] [price] [chain]\n" +
+        "/buy <token> <amount> [chain]\n" +
+        "/sell <token> <amount> [chain]\n" +
+        "/lp <token> <native> <token> [fee] [chain]\n" +
+        "/wallet • /balance [token] [chain] • /tx\n" +
+        "/mint [url] • /github • /status • /ping\n\n" +
+        "_Chain is auto-detected from the token. Add a chain name to force it._",
       { parse_mode: "Markdown", reply_markup: mainMenu },
     );
   });
@@ -173,8 +178,8 @@ export function registerHandlers(bot: Bot): void {
   });
 
   bot.command("balance", async (ctx) => {
-    const arg = (ctx.match || "").trim();
-    await showBalance(ctx, arg ? (arg as Address) : undefined);
+    const { parts, chain } = popChain((ctx.match || "").trim().split(/\s+/).filter(Boolean));
+    await showBalance(ctx, parts[0] ? (parts[0] as Address) : undefined, chain);
   });
   bot.callbackQuery("balance", async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -182,121 +187,108 @@ export function registerHandlers(bot: Bot): void {
   });
 
   bot.command("buy", async (ctx) => {
-    const p = (ctx.match || "").trim().split(/\s+/).filter(Boolean);
-    if (p.length < 2) {
-      await ctx.reply("/buy <tokenAddress> <amountNative>");
+    const { parts, chain } = popChain((ctx.match || "").trim().split(/\s+/).filter(Boolean));
+    if (parts.length < 2) {
+      await ctx.reply("/buy <tokenAddress> <amountNative> [chain]");
       return;
     }
-    await ctx.reply("⏳ Quoting...");
+    await ctx.reply("⏳ Detecting chain and quoting...");
     try {
-      const r = await buyToken(ctx.from!.id, p[0] as Address, p[1]);
-      await ctx.reply(swapSummary("Buy", r), { link_preview_options: { is_disabled: true } });
+      const r = await buyToken(ctx.from!.id, parts[0] as Address, parts[1], chain);
+      await ctx.reply(swapSummary("Buy", r), {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+      });
     } catch (e: any) {
       await ctx.reply(`❌ Buy failed: ${e.message}`);
     }
   });
 
   bot.command("sell", async (ctx) => {
-    const p = (ctx.match || "").trim().split(/\s+/).filter(Boolean);
-    if (p.length < 2) {
-      await ctx.reply("/sell <tokenAddress> <amountToken>");
+    const { parts, chain } = popChain((ctx.match || "").trim().split(/\s+/).filter(Boolean));
+    if (parts.length < 2) {
+      await ctx.reply("/sell <tokenAddress> <amountToken> [chain]");
       return;
     }
-    await ctx.reply("⏳ Quoting...");
+    await ctx.reply("⏳ Detecting chain and quoting...");
     try {
-      const r = await sellToken(ctx.from!.id, p[0] as Address, p[1]);
-      await ctx.reply(swapSummary("Sell", r), { link_preview_options: { is_disabled: true } });
+      const r = await sellToken(ctx.from!.id, parts[0] as Address, parts[1], chain);
+      await ctx.reply(swapSummary("Sell", r), {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+      });
     } catch (e: any) {
       await ctx.reply(`❌ Sell failed: ${e.message}`);
     }
   });
 
-  // ---------- Provide LP ----------
   bot.command("lp", async (ctx) => {
-    const p = (ctx.match || "").trim().split(/\s+/).filter(Boolean);
-    if (p.length < 3) {
+    const { parts, chain } = popChain((ctx.match || "").trim().split(/\s+/).filter(Boolean));
+    if (parts.length < 3) {
       await ctx.reply(
-        "/lp <tokenAddress> <amountNative> <amountToken> [feeTier]\n" +
-          "Example: /lp 0xToken 0.05 1000000 3000\n" +
-          "Fee tiers: 100 | 500 | 3000 | 10000",
+        "/lp <tokenAddress> <amountNative> <amountToken> [feeTier] [chain]\n" +
+          "Example: /lp 0xToken 0.05 1000000 3000",
       );
       return;
     }
-    const [token, amtNative, amtToken, feeStr] = p;
+    const [token, amtNative, amtToken, feeStr] = parts;
     const fee = Number(feeStr ?? 3000);
     const uid = ctx.from!.id;
 
     setPending(uid, {
       title: "Adding liquidity",
       run: async () => {
-        const r = await provideLiquidity(uid, token as Address, amtNative, amtToken, fee);
-        return (
-          `✅ LP position minted\n` +
-          `Fee tier: ${r.fee / 10000}%\n` +
-          `Pool: ${r.pool}\n` +
-          txLink(r.txHash)
-        );
+        const r = await provideLiquidity(uid, token as Address, amtNative, amtToken, fee, chain);
+        const link = r.explorerTx ? r.explorerTx + r.txHash : r.txHash;
+        return `✅ LP minted on ${r.chainName}\nFee ${r.fee / 10000}%  • pool ${r.pool}\n${link}`;
       },
     });
 
     await ctx.reply(
-      `💧 *Add Liquidity — preview*\n\n` +
-        `Chain: *${config.chainName}*\n` +
+      `💧 *Add Liquidity*\n\n` +
         `Token: \`${token}\`\n` +
-        `Native side: *${amtNative}*\n` +
-        `Token side: *${amtToken}*\n` +
-        `Fee tier: *${fee / 10000}%*\n` +
-        `Range: full range\n` +
-        `Min amounts: −${config.slippageBps / 100}%\n\n` +
-        `Native is wrapped to WETH automatically.`,
+        `Native: *${amtNative}*  •  Token: *${amtToken}*\n` +
+        `Fee tier: *${fee / 10000}%*  •  full range\n` +
+        `Chain: *${chain ? chain.name : "auto-detect"}*\n` +
+        `Min amounts: −${config.slippageBps / 100}%`,
       { parse_mode: "Markdown", reply_markup: confirmKeyboard() },
     );
   });
 
-  // ---------- Degen NFT mint ----------
   bot.command("degen", async (ctx) => {
-    const p = (ctx.match || "").trim().split(/\s+/).filter(Boolean);
-    if (p.length < 1) {
-      await ctx.reply(
-        "/degen <nftContract> [qty] [priceEachNative]\n" +
-          "Example: /degen 0xNft 2 0.001\n" +
-          "Mint signature is auto-detected.",
-      );
+    const { parts, chain } = popChain((ctx.match || "").trim().split(/\s+/).filter(Boolean));
+    if (!parts.length) {
+      await ctx.reply("/degen <nftContract> [qty] [priceEach] [chain]");
       return;
     }
-    const contract = p[0] as Address;
-    const qty = Number(p[1] ?? 1);
-    const price = p[2] ?? "0";
+    const contract = parts[0] as Address;
+    const qty = Number(parts[1] ?? 1);
+    const price = parts[2] ?? "0";
     const uid = ctx.from!.id;
+    const target = chain ?? config.chain;
 
-    let info;
+    let info: any = null;
     try {
-      info = await nftInfo(contract);
+      info = await nftInfo(contract, target);
     } catch {
-      info = null;
+      /* unreadable contract */
     }
 
     setPending(uid, {
       title: "Minting NFT",
       run: async () => {
-        const r = await mintNft(uid, contract, qty, price);
-        return (
-          `✅ Minted ${r.quantity}x\n` +
-          `Function: ${r.signature}\n` +
-          txLink(r.txHash)
-        );
+        const r = await mintNft(uid, contract, qty, price, {}, target);
+        const link = r.explorerTx ? r.explorerTx + r.txHash : r.txHash;
+        return `✅ Minted ${r.quantity}x on ${r.chainName} via ${r.signature}\n${link}`;
       },
     });
 
-    const total = (Number(price) * qty).toFixed(6);
     await ctx.reply(
-      `🎴 *Degen Mint — preview*\n\n` +
+      `🎴 *Degen Mint*\n\n` +
         (info ? `Collection: *${info.name}* (${info.symbol})\nSupply: ${info.totalSupply}/${info.maxSupply}\n` : "") +
         `Contract: \`${contract}\`\n` +
-        `Chain: *${config.chainName}*\n` +
-        `Quantity: *${qty}*\n` +
-        `Price each: *${price}*\n` +
-        `Total: *${total}*`,
+        `Chain: *${target.name}*\n` +
+        `Qty: *${qty}*  •  each *${price}*  •  total *${(Number(price) * qty).toFixed(6)}*`,
       { parse_mode: "Markdown", reply_markup: confirmKeyboard() },
     );
   });
@@ -317,10 +309,10 @@ export function registerHandlers(bot: Bot): void {
   });
 
   const help: Record<string, string> = {
-    buy_help: "/buy <tokenAddress> <amountNative>",
-    sell_help: "/sell <tokenAddress> <amountToken>",
-    lp_help: "/lp <tokenAddress> <amountNative> <amountToken> [feeTier]",
-    degen_help: "/degen <nftContract> [qty] [priceEach]",
+    buy_help: "/buy <tokenAddress> <amountNative> [chain]",
+    sell_help: "/sell <tokenAddress> <amountToken> [chain]",
+    lp_help: "/lp <tokenAddress> <amountNative> <amountToken> [feeTier] [chain]",
+    degen_help: "/degen <nftContract> [qty] [priceEach] [chain]",
   };
   for (const [key, text] of Object.entries(help)) {
     bot.callbackQuery(key, async (ctx) => {
