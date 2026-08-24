@@ -11,23 +11,64 @@ function systemPrompt(): string {
   return SYSTEM_PROMPT + "\n\nCurrent UTC time: " + new Date().toISOString();
 }
 
-async function callModel(messages: Msg[], withTools: boolean): Promise<any> {
-  const { apiKey, baseUrl, anthropicModel, maxTokens, idleMs } = config.agentRouter;
-  if (!apiKey) throw new Error("AGENTROUTER_API_KEY not set in .env");
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), idleMs * 3);
-  try {
-    const res = await fetch(baseUrl + "/v1/messages", {
-      method: "POST",
+/** Resolve which Anthropic-compatible endpoint and credentials to use. */
+function endpoint(): { url: string; headers: Record<string, string>; model: string } {
+  if (config.aiProvider === "anthropic") {
+    const { apiKey, baseUrl, model } = config.anthropic;
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in .env");
+    return {
+      url: `${baseUrl.replace(/\/$/, "")}/v1/messages`,
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer " + apiKey,
+        "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
+      model,
+    };
+  }
+
+  const { apiKey, baseUrl, anthropicModel } = config.agentRouter;
+  if (!apiKey) throw new Error("AGENTROUTER_API_KEY not set in .env");
+  return {
+    url: `${baseUrl}/v1/messages`,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "anthropic-version": "2023-06-01",
+    },
+    model: anthropicModel,
+  };
+}
+
+function explain(status: number, body: string): string {
+  if (status === 401 && /unauthorized_client|unauthorized client/i.test(body)) {
+    return (
+      "AgentRouter rejected this client (401 unauthorized_client). Their free tier only " +
+      "accepts approved coding clients, not custom apps.\n" +
+      "Options:\n" +
+      "  1. AI_PROVIDER=claude and route the claude CLI through AgentRouter " +
+      "(their documented path; realtime tools unavailable).\n" +
+      "  2. AI_PROVIDER=anthropic with your own ANTHROPIC_API_KEY " +
+      "(or any Anthropic-compatible endpoint via ANTHROPIC_BASE_URL); tools work.\n" +
+      "  3. Ask AgentRouter support whether custom clients can be approved."
+    );
+  }
+  if (status === 401) return "401 unauthorized - check the API key.";
+  if (status === 429) return "429 rate limited or out of quota.";
+  return `${status}: ${body.slice(0, 300)}`;
+}
+
+async function callModel(messages: Msg[], withTools: boolean): Promise<any> {
+  const ep = endpoint();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.agentRouter.idleMs * 3);
+  try {
+    const res = await fetch(ep.url, {
+      method: "POST",
+      headers: ep.headers,
       body: JSON.stringify({
-        model: anthropicModel,
-        max_tokens: maxTokens,
+        model: ep.model,
+        max_tokens: config.agentRouter.maxTokens,
         system: systemPrompt(),
         ...(withTools ? { tools: TOOL_DEFS } : {}),
         messages,
@@ -35,8 +76,7 @@ async function callModel(messages: Msg[], withTools: boolean): Promise<any> {
       signal: controller.signal,
     });
     if (!res.ok) {
-      const body = (await res.text()).slice(0, 300);
-      throw new Error("AgentRouter " + res.status + ": " + body);
+      throw new Error(explain(res.status, await res.text()));
     }
     return await res.json();
   } finally {
@@ -46,8 +86,7 @@ async function callModel(messages: Msg[], withTools: boolean): Promise<any> {
 
 /**
  * Agentic loop: the model may call tools (web search, prices, token scan)
- * before answering. onProgress reports each tool call, onText receives the
- * final answer. Returns the final answer.
+ * before answering.
  */
 export async function runAgent(
   userPrompt: string,
@@ -62,8 +101,7 @@ export async function runAgent(
     try {
       data = await callModel(messages, toolsEnabled);
     } catch (e: any) {
-      // Upstream may not support the tools parameter - degrade gracefully.
-      if (toolsEnabled && /tool/i.test(e?.message ?? "")) {
+      if (toolsEnabled && /tool/i.test(e?.message ?? "") && !/unauthorized/i.test(e?.message ?? "")) {
         console.warn("[agent] tools rejected upstream, retrying without tools");
         toolsEnabled = false;
         data = await callModel(messages, false);
@@ -86,7 +124,6 @@ export async function runAgent(
     }
 
     if (text) onProgress(text);
-
     messages.push({ role: "assistant", content: blocks });
 
     const results: any[] = [];

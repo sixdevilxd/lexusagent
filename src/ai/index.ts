@@ -1,21 +1,27 @@
 import { config } from "../config";
 import { streamAgentRouter } from "./agentrouter";
+import { askClaude } from "./claude";
 import { runAgent } from "./agent";
 
 /**
- * Streaming AI entry point. Always runs on the AgentRouter API key.
+ * AI entry point.
  *
- * - agentrouter-claude (default): full agent loop with realtime tools
- *   (web search, social search, DexScreener prices, token safety scan).
- * - agentrouter: plain OpenAI-compatible streaming, no tools.
- *
- * onDelta receives progress lines first, then the final answer.
+ *   agentrouter-claude : AgentRouter Anthropic endpoint + realtime tools
+ *   anthropic          : your own Anthropic-compatible endpoint + realtime tools
+ *   agentrouter        : AgentRouter OpenAI-compatible streaming, no tools
+ *   claude             : local Claude Code CLI, no tools
  */
 export async function askStream(
   prompt: string,
   onDelta: (text: string) => void,
   opts?: { idleMs?: number },
 ): Promise<string> {
+  if (config.aiProvider === "claude") {
+    const out = await askClaude(prompt);
+    onDelta(out);
+    return out;
+  }
+
   if (config.aiProvider === "agentrouter") {
     return streamAgentRouter(prompt, onDelta, opts);
   }
@@ -33,7 +39,7 @@ export async function askStream(
   );
 }
 
-/** Non-streaming convenience wrapper (used by the mint page reader). */
+/** Non-streaming convenience wrapper. */
 export async function ask(
   prompt: string,
   opts?: { idleMs?: number },
