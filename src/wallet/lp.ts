@@ -1,6 +1,7 @@
-import { encodeFunctionData, erc20Abi, parseUnits, type Address } from "viem";
-import { publicClient, getKernelClient } from "./zerodev";
+import { encodeFunctionData, erc20Abi, parseUnits, type Address, type Chain } from "viem";
+import { getKernelClient } from "./zerodev";
 import { config } from "../config";
+import { chainCtx, detectChainForToken, type ChainCtx } from "../chains";
 import { recordTx } from "./history";
 
 const TICK_SPACING: Record<number, number> = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
@@ -77,12 +78,15 @@ export type LpResult = {
   pool: Address;
   amountNative: string;
   amountToken: string;
+  chainName: string;
+  explorerTx: string;
+  detected: boolean;
 };
 
 /**
- * Provide full-range liquidity to a Uniswap V3 <token>/WETH pool.
- * Wraps native -> WETH, approves both sides and mints the position in ONE UserOperation.
- * The pool must already exist.
+ * Provide full-range liquidity to a token/WETH pool.
+ * The chain is auto-detected from where the token has the deepest liquidity,
+ * unless one is forced.
  */
 export async function provideLiquidity(
   userId: number,
@@ -90,32 +94,48 @@ export async function provideLiquidity(
   amountNative: string,
   amountToken: string,
   fee = 3000,
+  forceChain?: Chain,
 ): Promise<LpResult> {
-  if (!config.wethAddress || !config.factory || !config.positionManager) {
-    throw new Error(
-      `Uniswap V3 not configured for ${config.chainName} (chain ${config.chainId}).`,
-    );
-  }
   if (!TICK_SPACING[fee]) {
     throw new Error(`Invalid fee tier ${fee}. Use 100, 500, 3000 or 10000.`);
   }
 
-  const pool = (await publicClient.readContract({
-    address: config.factory,
+  let chain = forceChain ?? config.chain;
+  let detected = false;
+  if (!forceChain) {
+    const { hit, nonEvmOnly } = await detectChainForToken(token);
+    if (hit) {
+      chain = hit.chain;
+      detected = true;
+    } else if (nonEvmOnly?.length) {
+      throw new Error(
+        `Token only trades on ${nonEvmOnly.join(", ")}, which is not EVM.`,
+      );
+    }
+  }
+
+  const ctx: ChainCtx = chainCtx(chain);
+  if (!ctx.preset) {
+    throw new Error(`No Uniswap V3 deployment configured for ${ctx.name}.`);
+  }
+  const { weth, factory, positionManager } = ctx.preset;
+
+  const pool = (await ctx.publicClient.readContract({
+    address: factory,
     abi: factoryAbi,
     functionName: "getPool",
-    args: [config.wethAddress, token, fee],
+    args: [weth, token, fee],
   })) as Address;
 
   if (!pool || /^0x0{40}$/i.test(pool)) {
     throw new Error(
-      `No Uniswap V3 pool for this pair at the ${fee / 10000}% fee tier. Try another tier.`,
+      `No pool on ${ctx.name} at the ${fee / 10000}% fee tier. Try another tier.`,
     );
   }
 
-  const { kernelClient, smartAddress } = await getKernelClient(userId);
+  const { kernelClient, smartAddress } = await getKernelClient(userId, chain);
 
-  const decimals = (await publicClient.readContract({
+  const decimals = (await ctx.publicClient.readContract({
     address: token,
     abi: erc20Abi,
     functionName: "decimals",
@@ -124,10 +144,9 @@ export async function provideLiquidity(
   const wethAmount = parseUnits(amountNative, 18);
   const tokenAmount = parseUnits(amountToken, decimals);
 
-  // Uniswap requires token0 < token1 by address
-  const wethIsToken0 = config.wethAddress.toLowerCase() < token.toLowerCase();
-  const token0 = wethIsToken0 ? config.wethAddress : token;
-  const token1 = wethIsToken0 ? token : config.wethAddress;
+  const wethIsToken0 = weth.toLowerCase() < token.toLowerCase();
+  const token0 = wethIsToken0 ? weth : token;
+  const token1 = wethIsToken0 ? token : weth;
   const amount0 = wethIsToken0 ? wethAmount : tokenAmount;
   const amount1 = wethIsToken0 ? tokenAmount : wethAmount;
 
@@ -135,20 +154,18 @@ export async function provideLiquidity(
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
 
   const calls = [
-    // wrap native
     {
-      to: config.wethAddress,
+      to: weth,
       value: wethAmount,
       data: encodeFunctionData({ abi: wethAbi, functionName: "deposit" }),
     },
-    // approve both sides to the position manager
     {
-      to: config.wethAddress,
+      to: weth,
       value: 0n,
       data: encodeFunctionData({
         abi: erc20Abi,
         functionName: "approve",
-        args: [config.positionManager, wethAmount],
+        args: [positionManager, wethAmount],
       }),
     },
     {
@@ -157,12 +174,11 @@ export async function provideLiquidity(
       data: encodeFunctionData({
         abi: erc20Abi,
         functionName: "approve",
-        args: [config.positionManager, tokenAmount],
+        args: [positionManager, tokenAmount],
       }),
     },
-    // mint the position
     {
-      to: config.positionManager,
+      to: positionManager,
       value: 0n,
       data: encodeFunctionData({
         abi: positionManagerAbi,
@@ -195,9 +211,18 @@ export async function provideLiquidity(
   recordTx(userId, {
     type: "lp",
     token,
-    amount: `${amountNative} native + ${amountToken} token`,
+    amount: `${amountNative} + ${amountToken} on ${ctx.name}`,
     txHash,
   });
 
-  return { txHash, fee, pool, amountNative, amountToken };
+  return {
+    txHash,
+    fee,
+    pool,
+    amountNative,
+    amountToken,
+    chainName: ctx.name,
+    explorerTx: ctx.explorerTx,
+    detected,
+  };
 }

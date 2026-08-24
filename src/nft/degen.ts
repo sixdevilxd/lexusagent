@@ -1,6 +1,7 @@
-import { encodeFunctionData, parseEther, parseAbi, type Address } from "viem";
-import { publicClient, getKernelClient } from "../wallet/zerodev";
+import { encodeFunctionData, parseEther, parseAbi, type Address, type Chain } from "viem";
+import { getKernelClient } from "../wallet/zerodev";
 import { config } from "../config";
+import { chainCtx } from "../chains";
 import { recordTx } from "../wallet/history";
 
 export type MintExtras = {
@@ -16,7 +17,6 @@ type Candidate = {
   needs?: "proof" | "signature";
 };
 
-/** Allowlist / proof-aware signatures are tried first when we have a proof. */
 const CANDIDATES: Candidate[] = [
   {
     label: "mint(uint256,bytes32[])",
@@ -60,7 +60,6 @@ const CANDIDATES: Candidate[] = [
     args: (_t, q, x) => [BigInt(q), x.signature ?? "0x"],
     needs: "signature",
   },
-  // public / open mints
   {
     label: "mint(uint256)",
     abi: parseAbi(["function mint(uint256 quantity) payable"]),
@@ -104,16 +103,19 @@ export type MintNftResult = {
   signature: string;
   quantity: number;
   valueEth: string;
+  chainName: string;
+  explorerTx: string;
 };
 
-/** Probe which mint signature the contract actually accepts, without sending. */
 export async function findMintCall(
   contract: Address,
   from: Address,
   quantity: number,
   value: bigint,
   extras: MintExtras = {},
+  chain: Chain = config.chain,
 ): Promise<{ data: `0x${string}`; label: string }> {
+  const ctx = chainCtx(chain);
   const hasProof = Array.isArray(extras.proof) && extras.proof.length > 0;
   const hasSig = typeof extras.signature === "string" && extras.signature.length > 2;
 
@@ -127,14 +129,14 @@ export async function findMintCall(
   for (const c of ordered) {
     try {
       const args = c.args(from, quantity, extras);
-      await publicClient.estimateContractGas({
+      await ctx.publicClient.estimateContractGas({
         address: contract,
         abi: c.abi,
         functionName: c.fn as any,
         args,
         account: from,
         value,
-      });
+      } as any);
       return {
         data: encodeFunctionData({ abi: c.abi, functionName: c.fn as any, args }),
         label: c.label,
@@ -143,24 +145,21 @@ export async function findMintCall(
       errors.push(`${c.label}: ${(e?.shortMessage ?? e?.message ?? "revert").slice(0, 70)}`);
     }
   }
-  throw new Error("No mint function succeeded. Tried:\n" + errors.join("\n"));
+  throw new Error(`No mint function succeeded on ${ctx.name}. Tried:\n` + errors.join("\n"));
 }
 
-/**
- * Mint from an NFT contract. Auto-detects the signature and supports
- * allowlist proofs / backend signatures.
- */
 export async function mintNft(
   userId: number,
   contract: Address,
   quantity = 1,
   priceEth = "0",
   extras: MintExtras = {},
+  chain: Chain = config.chain,
 ): Promise<MintNftResult> {
-  const { kernelClient, smartAddress } = await getKernelClient(userId);
+  const { kernelClient, smartAddress, ctx } = await getKernelClient(userId, chain);
   const value = parseEther(priceEth) * BigInt(quantity);
 
-  const call = await findMintCall(contract, smartAddress, quantity, value, extras);
+  const call = await findMintCall(contract, smartAddress, quantity, value, extras, chain);
 
   const hash = await kernelClient.sendUserOperation({
     callData: await kernelClient.account.encodeCalls([
@@ -173,15 +172,22 @@ export async function mintNft(
   recordTx(userId, {
     type: "nft",
     token: contract,
-    amount: `${quantity}x @ ${priceEth}`,
+    amount: `${quantity}x @ ${priceEth} on ${ctx.name}`,
     txHash,
   });
 
-  return { txHash, signature: call.label, quantity, valueEth: priceEth };
+  return {
+    txHash,
+    signature: call.label,
+    quantity,
+    valueEth: priceEth,
+    chainName: ctx.name,
+    explorerTx: ctx.explorerTx,
+  };
 }
 
-/** Basic collection info for the confirmation preview. */
-export async function nftInfo(contract: Address) {
+export async function nftInfo(contract: Address, chain: Chain = config.chain) {
+  const ctx = chainCtx(chain);
   const abi = parseAbi([
     "function name() view returns (string)",
     "function symbol() view returns (string)",
@@ -190,11 +196,11 @@ export async function nftInfo(contract: Address) {
   ]);
   const read = async (fn: string) => {
     try {
-      return await publicClient.readContract({
+      return await ctx.publicClient.readContract({
         address: contract,
         abi,
         functionName: fn as any,
-      });
+      } as any);
     } catch {
       return null;
     }
@@ -210,6 +216,6 @@ export async function nftInfo(contract: Address) {
     symbol: (symbol as string) ?? "?",
     totalSupply: total != null ? String(total) : "?",
     maxSupply: max != null ? String(max) : "?",
-    chain: config.chainName,
+    chain: ctx.name,
   };
 }
