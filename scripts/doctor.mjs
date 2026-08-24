@@ -1,28 +1,23 @@
 #!/usr/bin/env node
 /**
- * lexusagent doctor — diagnose why the bot / AI is not replying.
+ * lexusagent doctor - test every AI provider path and say which one works.
  * Run:  npm run doctor
  */
 import "dotenv/config";
+import { spawn } from "node:child_process";
 
-const ok = (m) => console.log(`\x1b[32m✅\x1b[0m ${m}`);
-const bad = (m) => console.log(`\x1b[31m❌\x1b[0m ${m}`);
-const warn = (m) => console.log(`\x1b[33m⚠\uFE0F \x1b[0m ${m}`);
-const head = (m) => console.log(`\n\x1b[1m${m}\x1b[0m`);
+const g = (s) => `\x1b[32m${s}\x1b[0m`;
+const r = (s) => `\x1b[31m${s}\x1b[0m`;
+const y = (s) => `\x1b[33m${s}\x1b[0m`;
+const b = (s) => `\x1b[1m${s}\x1b[0m`;
 
-const problems = [];
-const fail = (m) => {
-  bad(m);
-  problems.push(m);
-};
+const clean = (v) => (v ?? "").trim().replace(/^["']|["']$/g, "");
+const PROMPT = "balas OK saja";
+const working = [];
 
-function clean(v) {
-  return (v ?? "").trim().replace(/^["']|["']$/g, "");
-}
-
-async function post(url, headers, body, timeoutMs = 45000) {
+async function post(url, headers, body, ms = 45000) {
   const c = new AbortController();
-  const t = setTimeout(() => c.abort(), timeoutMs);
+  const t = setTimeout(() => c.abort(), ms);
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -30,132 +25,196 @@ async function post(url, headers, body, timeoutMs = 45000) {
       body: JSON.stringify(body),
       signal: c.signal,
     });
-    const text = await res.text();
-    return { status: res.status, text };
+    return { status: res.status, text: await res.text() };
   } finally {
     clearTimeout(t);
   }
 }
 
-// ---------------------------------------------------------------- env
-head("1. Environment");
-const rawKey = process.env.AGENTROUTER_API_KEY ?? "";
-const key = clean(rawKey).replace(/^Bearer\s+/i, "");
-const tgRaw = process.env.TELEGRAM_BOT_TOKEN ?? "";
-const tg = clean(tgRaw);
-
-if (!key) fail("AGENTROUTER_API_KEY kosong — isi di .env (agentrouter.org/console/token)");
-else {
-  ok(`AGENTROUTER_API_KEY terisi (${key.length} karakter)`);
-  if (rawKey !== key) warn("Key ada kutip/spasi/prefix 'Bearer' — bersihkan di .env");
+function diagnose(status, text) {
+  if (status === 401 && /unauthorized_client|unauthorized client/i.test(text)) {
+    return "blocked: AgentRouter only accepts approved coding clients, not custom apps";
+  }
+  if (status === 401) return "bad or revoked API key";
+  if (status === 403) return "forbidden";
+  if (status === 404) return "wrong endpoint or model not found";
+  if (status === 429) return "rate limited / out of quota";
+  return text.slice(0, 160);
 }
 
-if (!tg) fail("TELEGRAM_BOT_TOKEN kosong");
-else if (!/^\d+:[\w-]{30,}$/.test(tg)) warn("Format TELEGRAM_BOT_TOKEN terlihat aneh");
-else ok("TELEGRAM_BOT_TOKEN format valid");
-
+// ---------------------------------------------------------------- 0. env
+console.log(b("\n0. Config"));
 const provider = clean(process.env.AI_PROVIDER) || "agentrouter-claude";
-console.log(`   AI_PROVIDER = ${provider}`);
-if (provider === "claude") {
-  warn("AI_PROVIDER=claude sudah tidak dipakai — otomatis dialihkan ke AgentRouter");
-}
+const arKey = clean(process.env.AGENTROUTER_API_KEY).replace(/^Bearer\s+/i, "");
+const antKey = clean(process.env.ANTHROPIC_API_KEY);
+const antBase = clean(process.env.ANTHROPIC_BASE_URL) || "https://api.anthropic.com";
+const tg = clean(process.env.TELEGRAM_BOT_TOKEN);
 
-// ------------------------------------------------------- agentrouter
-head("2. AgentRouter — Anthropic (claude-opus-5)");
-const claudeModel = clean(process.env.AGENTROUTER_CLAUDE_MODEL) || "claude-opus-5";
-if (key) {
+console.log(`   AI_PROVIDER          = ${provider}`);
+console.log(`   AGENTROUTER_API_KEY  = ${arKey ? `set (${arKey.length} chars)` : r("empty")}`);
+console.log(`   ANTHROPIC_API_KEY    = ${antKey ? `set (${antKey.length} chars)` : "empty"}`);
+console.log(`   ANTHROPIC_BASE_URL   = ${antBase}`);
+console.log(`   TELEGRAM_BOT_TOKEN   = ${tg ? "set" : r("empty")}`);
+
+// ------------------------------------------- 1. agentrouter-claude
+console.log(b("\n1. AI_PROVIDER=agentrouter-claude"));
+if (!arKey) {
+  console.log(y("   skipped - no AGENTROUTER_API_KEY"));
+} else {
   try {
-    const r = await post(
+    const res = await post(
       "https://agentrouter.org/v1/messages",
-      { Authorization: `Bearer ${key}`, "anthropic-version": "2023-06-01" },
-      { model: claudeModel, max_tokens: 32, messages: [{ role: "user", content: "balas OK saja" }] },
+      { Authorization: `Bearer ${arKey}`, "anthropic-version": "2023-06-01" },
+      {
+        model: clean(process.env.AGENTROUTER_CLAUDE_MODEL) || "claude-opus-5",
+        max_tokens: 32,
+        messages: [{ role: "user", content: PROMPT }],
+      },
     );
-    if (r.status === 200) {
-      let txt = "";
-      try {
-        const j = JSON.parse(r.text);
-        txt = (j.content ?? []).map((c) => c.text ?? "").join("").trim();
-      } catch {}
-      ok(`HTTP 200 — model "${claudeModel}" jawab: ${JSON.stringify(txt).slice(0, 80)}`);
+    if (res.status === 200) {
+      console.log(g("   OK"));
+      working.push("agentrouter-claude");
     } else {
-      fail(`HTTP ${r.status} — ${r.text.slice(0, 300)}`);
-      if (r.status === 401) console.log("   → API key salah / dicabut");
-      if (r.status === 404) console.log(`   → Model "${claudeModel}" tidak ada. Coba model lain.`);
-      if (r.status === 429) console.log("   → Kuota habis / rate limit");
+      console.log(r(`   HTTP ${res.status} - ${diagnose(res.status, res.text)}`));
     }
   } catch (e) {
-    fail(`Gagal konek: ${e.message}`);
-    console.log("   → Cek koneksi internet / DNS di Termux");
+    console.log(r(`   failed: ${e.message}`));
   }
-} else {
-  warn("dilewati (tidak ada API key)");
 }
 
-head("3. AgentRouter — OpenAI-compatible (fallback)");
-const oaModel = clean(process.env.AGENTROUTER_MODEL) || "gpt-5.5";
-if (key) {
+// ------------------------------------------------- 2. agentrouter
+console.log(b("\n2. AI_PROVIDER=agentrouter (no tools)"));
+if (!arKey) {
+  console.log(y("   skipped"));
+} else {
   try {
-    const r = await post(
+    const res = await post(
       "https://agentrouter.org/v1/chat/completions",
-      { Authorization: `Bearer ${key}` },
-      { model: oaModel, messages: [{ role: "user", content: "balas OK saja" }] },
+      { Authorization: `Bearer ${arKey}` },
+      {
+        model: clean(process.env.AGENTROUTER_MODEL) || "gpt-5.5",
+        messages: [{ role: "user", content: PROMPT }],
+      },
     );
-    if (r.status === 200) {
-      let txt = "";
-      try {
-        txt = JSON.parse(r.text).choices?.[0]?.message?.content ?? "";
-      } catch {}
-      ok(`HTTP 200 — model "${oaModel}" jawab: ${JSON.stringify(txt.trim()).slice(0, 80)}`);
+    if (res.status === 200) {
+      console.log(g("   OK"));
+      working.push("agentrouter");
     } else {
-      warn(`HTTP ${r.status} — ${r.text.slice(0, 200)}`);
+      console.log(r(`   HTTP ${res.status} - ${diagnose(res.status, res.text)}`));
     }
   } catch (e) {
-    warn(`Gagal konek: ${e.message}`);
+    console.log(r(`   failed: ${e.message}`));
   }
-} else {
-  warn("dilewati (tidak ada API key)");
 }
 
-// ---------------------------------------------------------- telegram
-head("4. Telegram");
-if (tg) {
+// ------------------------------------------------------ 3. claude CLI
+console.log(b("\n3. AI_PROVIDER=claude (local CLI, no tools)"));
+console.log(`   ANTHROPIC_BASE_URL   = ${clean(process.env.ANTHROPIC_BASE_URL) || "(unset)"}`);
+console.log(`   ANTHROPIC_AUTH_TOKEN = ${clean(process.env.ANTHROPIC_AUTH_TOKEN) ? "set" : "(unset)"}`);
+
+const cliResult = await new Promise((resolve) => {
+  let child;
+  try {
+    child = spawn(clean(process.env.CLAUDE_CMD) || "claude", ["-p", PROMPT], {
+      env: process.env,
+    });
+  } catch (e) {
+    resolve({ ok: false, msg: e.message });
+    return;
+  }
+  let out = "";
+  let err = "";
+  const t = setTimeout(() => {
+    child.kill("SIGKILL");
+    resolve({ ok: false, msg: "timed out after 45s (CLI likely waiting for login)" });
+  }, 45000);
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (err += d));
+  child.on("error", (e) => {
+    clearTimeout(t);
+    resolve({ ok: false, msg: e.code === "ENOENT" ? "claude not found in PATH" : e.message });
+  });
+  child.on("close", (code) => {
+    clearTimeout(t);
+    if (code === 0 && out.trim()) resolve({ ok: true, msg: out.trim().slice(0, 80) });
+    else resolve({ ok: false, msg: (err.trim() || `exit ${code}`).slice(0, 200) });
+  });
+});
+
+if (cliResult.ok) {
+  console.log(g(`   OK - replied: ${JSON.stringify(cliResult.msg)}`));
+  working.push("claude");
+} else {
+  console.log(r(`   ${cliResult.msg}`));
+}
+
+// ------------------------------------------------------- 4. anthropic
+console.log(b("\n4. AI_PROVIDER=anthropic (own key, tools work)"));
+if (!antKey) {
+  console.log(y("   skipped - no ANTHROPIC_API_KEY"));
+} else {
+  try {
+    const res = await post(
+      `${antBase.replace(/\/$/, "")}/v1/messages`,
+      { "x-api-key": antKey, "anthropic-version": "2023-06-01" },
+      {
+        model: clean(process.env.ANTHROPIC_MODEL) || "claude-opus-5",
+        max_tokens: 32,
+        messages: [{ role: "user", content: PROMPT }],
+      },
+    );
+    if (res.status === 200) {
+      console.log(g("   OK"));
+      working.push("anthropic");
+    } else {
+      console.log(r(`   HTTP ${res.status} - ${diagnose(res.status, res.text)}`));
+    }
+  } catch (e) {
+    console.log(r(`   failed: ${e.message}`));
+  }
+}
+
+// -------------------------------------------------------- 5. telegram
+console.log(b("\n5. Telegram"));
+if (!tg) {
+  console.log(r("   TELEGRAM_BOT_TOKEN empty"));
+} else {
   try {
     const me = await (await fetch(`https://api.telegram.org/bot${tg}/getMe`)).json();
-    if (!me.ok) fail(`getMe gagal: ${me.description}`);
-    else {
-      ok(`Bot: @${me.result.username} (${me.result.first_name})`);
-      console.log(`   → Pastikan kamu chat ke @${me.result.username}, bukan bot lain`);
-    }
-
+    if (me.ok) console.log(g(`   bot @${me.result.username}`));
+    else console.log(r(`   getMe failed: ${me.description}`));
     const wh = await (await fetch(`https://api.telegram.org/bot${tg}/getWebhookInfo`)).json();
     if (wh.ok && wh.result.url) {
-      fail(`Webhook aktif: ${wh.result.url} — polling TIDAK akan terima pesan!`);
-      console.log("   Fix:");
-      console.log(`   curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/deleteWebhook?drop_pending_updates=true"`);
+      console.log(r(`   webhook set (${wh.result.url}) - polling will NOT receive messages`));
+      console.log(`   fix: curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/deleteWebhook?drop_pending_updates=true"`);
     } else if (wh.ok) {
-      ok("Tidak ada webhook — polling siap");
-      if (wh.result.pending_update_count > 0) {
-        warn(`${wh.result.pending_update_count} update tertunda`);
-      }
+      console.log(g("   no webhook - polling ok"));
     }
   } catch (e) {
-    fail(`Telegram error: ${e.message}`);
+    console.log(r(`   ${e.message}`));
   }
 }
 
-// ------------------------------------------------------------ others
-head("5. Lainnya");
-console.log(`   ALLOWED_USER_IDS = ${process.env.ALLOWED_USER_IDS || "(kosong — semua orang boleh)"}`);
-console.log(`   CHAIN            = ${process.env.CHAIN || "base-sepolia (default)"}`);
-console.log(`   ZERODEV_PROJECT_ID = ${process.env.ZERODEV_PROJECT_ID ? "terisi" : "(kosong)"}`);
-console.log(`   GITHUB_CLIENT_ID   = ${process.env.GITHUB_CLIENT_ID ? "terisi" : "(kosong)"}`);
-
 // ----------------------------------------------------------- verdict
-head("HASIL");
-if (!problems.length) {
-  ok("Semua cek utama lolos — jalankan: npm start");
+console.log(b("\n=== VERDICT ==="));
+if (!working.length) {
+  console.log(r("No AI provider works."));
+  console.log("\nPick one:");
+  console.log("  a) Route the claude CLI through AgentRouter (their documented path):");
+  console.log('     export ANTHROPIC_AUTH_TOKEN="<agentrouter key>"');
+  console.log('     export ANTHROPIC_BASE_URL="https://agentrouter.org"');
+  console.log('     export ANTHROPIC_MODEL="claude-opus-5"');
+  console.log("     claude -p \"hi\"     # must reply, then: AI_PROVIDER=claude");
+  console.log("  b) Use your own key:  ANTHROPIC_API_KEY=sk-ant-...  AI_PROVIDER=anthropic");
 } else {
-  bad(`${problems.length} masalah ditemukan:`);
-  problems.forEach((p, i) => console.log(`   ${i + 1}. ${p}`));
+  const best =
+    working.find((w) => w === "agentrouter-claude") ??
+    working.find((w) => w === "anthropic") ??
+    working[0];
+  console.log(g(`Working: ${working.join(", ")}`));
+  console.log(`\nUse this:\n  sed -i 's|^AI_PROVIDER=.*|AI_PROVIDER=${best}|' .env && npm start`);
+  if (best === "claude" || best === "agentrouter") {
+    console.log(y("\nNote: realtime tools (prices, token scan, search) are unavailable on this provider."));
+  }
 }
 console.log("");
