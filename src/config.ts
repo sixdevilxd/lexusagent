@@ -1,59 +1,11 @@
 import "dotenv/config";
-import * as viemChains from "viem/chains";
-import type { Chain } from "viem";
+import { resolveChain } from "./chains";
 import { DEX_PRESETS } from "./wallet/presets";
 
 function req(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
-}
-
-const CHAIN_ALIASES: Record<string, string> = {
-  eth: "mainnet",
-  ethereum: "mainnet",
-  "base-sepolia": "baseSepolia",
-  "arbitrum-one": "arbitrum",
-  "arbitrum-nova": "arbitrumNova",
-  "arbitrum-sepolia": "arbitrumSepolia",
-  "optimism-sepolia": "optimismSepolia",
-  "op-sepolia": "optimismSepolia",
-  "polygon-amoy": "polygonAmoy",
-  bnb: "bsc",
-  binance: "bsc",
-  opbnb: "opBNB",
-  "avalanche-fuji": "avalancheFuji",
-  fuji: "avalancheFuji",
-  "linea-sepolia": "lineaSepolia",
-  "scroll-sepolia": "scrollSepolia",
-  "mantle-sepolia": "mantleSepoliaTestnet",
-  "mode-testnet": "modeTestnet",
-  "blast-sepolia": "blastSepolia",
-  "celo-alfajores": "celoAlfajores",
-  "gnosis-chiado": "gnosisChiado",
-  "unichain-sepolia": "unichainSepolia",
-  "ink-sepolia": "inkSepolia",
-  "monad-testnet": "monadTestnet",
-};
-
-function resolveChain(key: string): Chain | undefined {
-  const all = viemChains as unknown as Record<string, Chain>;
-  const isChain = (c: any): c is Chain =>
-    c && typeof c === "object" && typeof c.id === "number";
-
-  if (/^\d+$/.test(key)) {
-    const id = Number(key);
-    return Object.values(all).find((c) => isChain(c) && c.id === id);
-  }
-
-  const name = CHAIN_ALIASES[key.toLowerCase()] ?? key;
-  const direct = all[name];
-  if (isChain(direct)) return direct;
-
-  const found = Object.entries(all).find(
-    ([k, v]) => k.toLowerCase() === name.toLowerCase() && isChain(v),
-  );
-  return found?.[1];
 }
 
 const chainKey = (process.env.CHAIN ?? "base").trim();
@@ -77,14 +29,20 @@ const zerodevRpc =
 
 const preset = DEX_PRESETS[chain.id];
 
+// AgentRouter base URL - exactly this, nothing appended.
 const AGENTROUTER_BASE_URL = "https://agentrouter.org";
 
-const rawProvider = (process.env.AI_PROVIDER ?? "agentrouter-claude").trim();
-const aiProvider: "agentrouter-claude" | "agentrouter" =
-  rawProvider === "agentrouter" ? "agentrouter" : "agentrouter-claude";
+type Provider = "agentrouter-claude" | "agentrouter" | "anthropic" | "claude";
+const VALID: Provider[] = ["agentrouter-claude", "agentrouter", "anthropic", "claude"];
+
+const rawProvider = (process.env.AI_PROVIDER ?? "agentrouter-claude").trim() as Provider;
+const aiProvider: Provider = VALID.includes(rawProvider)
+  ? rawProvider
+  : "agentrouter-claude";
 if (rawProvider !== aiProvider) {
   console.warn(
-    `[config] AI_PROVIDER="${rawProvider}" is no longer supported - using "${aiProvider}".`,
+    `[config] Unknown AI_PROVIDER="${rawProvider}" - falling back to "${aiProvider}". ` +
+      `Valid: ${VALID.join(", ")}`,
   );
 }
 
@@ -116,7 +74,10 @@ export const config = {
     .filter(Boolean)
     .map(Number),
 
+  // ---- AI ----
   aiProvider,
+
+  // AgentRouter (their free tier only accepts approved coding clients)
   agentRouter: {
     apiKey: process.env.AGENTROUTER_API_KEY ?? "",
     baseUrl: AGENTROUTER_BASE_URL,
@@ -126,11 +87,24 @@ export const config = {
     idleMs: Number(process.env.AI_IDLE_TIMEOUT_MS ?? "60000"),
   },
 
+  // Your own Anthropic-compatible endpoint (direct API, OpenRouter, gateway...)
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+    baseUrl: process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com",
+    model: process.env.ANTHROPIC_MODEL ?? "claude-opus-5",
+  },
+
+  // Local Claude Code CLI
+  claudeCmd: process.env.CLAUDE_CMD ?? "claude",
+  claudeArgs: (process.env.CLAUDE_ARGS ?? "-p").split(" ").filter(Boolean),
+
+  // ---- GitHub OAuth (Device Flow) ----
   github: {
     clientId: process.env.GITHUB_CLIENT_ID ?? "",
     scopes: process.env.GITHUB_SCOPES || GITHUB_FULL_SCOPES,
   },
 
+  // ---- Default chain (auto-switch overrides this per operation) ----
   chainKey,
   chain,
   chainId: chain.id,
@@ -148,7 +122,7 @@ export const config = {
 
   walletEncryptionKey: req("WALLET_ENCRYPTION_KEY"),
 
-  // Uniswap V3 (auto-filled per chain, overridable)
+  // Uniswap V3 for the DEFAULT chain; per-chain presets live in chains.ts
   dexRouter: (process.env.DEX_ROUTER || preset?.router || "") as `0x${string}`,
   quoter: (process.env.QUOTER_ADDRESS || preset?.quoter || "") as `0x${string}`,
   factory: (process.env.UNISWAP_FACTORY || preset?.factory || "") as `0x${string}`,
